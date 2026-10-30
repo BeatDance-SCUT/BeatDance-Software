@@ -1,0 +1,11 @@
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.vscode/
+.DS_Store
+Thumbs.db
+*.log
+
+# Exclude project records and references
+项目记录（参考文献）/

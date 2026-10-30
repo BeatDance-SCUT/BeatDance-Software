@@ -1,0 +1,5 @@
+Noise level,Detected peaks,True frequency (Hz),Estimated frequency (Hz),Error (%)
+0.1,18,1.8,1.801,0.05
+0.35,18,1.8,1.805,0.26
+0.8,18,1.8,1.809,0.47
+1.2,17,1.8,1.702,5.44
