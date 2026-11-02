@@ -6,7 +6,7 @@ import streamlit as st
 from beatdance.imu_udp import UDPReceiver
 from beatdance.paths import DEFAULT_RECORDINGS, EXAMPLE_ANALYSIS
 from beatdance.recordings import SIGNALS, rows_to_frame, save_analysis
-from beatdance.signal_processing import analyze_imu
+from beatdance.signal_processing import analyze_imu, peak_intervals
 
 
 st.set_page_config(page_title="Jump Rope Monitor", page_icon="🏃", layout="wide")
@@ -27,18 +27,15 @@ def render_analysis(df):
     except (TypeError, ValueError):
         st.error("分析 CSV 为空或含有无效数值。")
         return
-    groups = [key for key in ("segment", "span") if key in df.columns]
+    groups = [key for key in ("signal", "segment", "span") if key in df.columns]
     df = df.sort_values([*groups, "time"]).reset_index(drop=True)
     peaks = df[df["is_peak"] == 1]
-    intervals = []
+    intervals = peak_intervals(df)
     series = df.groupby(groups, sort=False) if groups else [(0, df)]
     duration = 0.0
     for _, frame in series:
         duration += float(frame["time"].max() - frame["time"].min())
-        intervals.extend(np.diff(frame.loc[frame["is_peak"] == 1, "time"]))
-    intervals = np.asarray(intervals)
-    intervals = intervals[intervals > 0]
-    average = float(intervals.mean()) if intervals.size else None
+    average = float(intervals["delta_t"].mean()) if not intervals.empty else None
     cards = st.columns(5)
     cards[0].metric("检测波峰", len(peaks))
     cards[1].metric("估计波峰频率 / 分钟", f"{60 / average:.1f}" if average else "N/A")
@@ -59,6 +56,28 @@ def render_analysis(df):
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
+    st.subheader("波峰间隔随时间变化 · Δt–t")
+    st.caption("横轴 t 为后一个波峰的设备相对时间；纵轴 Δt = tᵢ − tᵢ₋₁，单位均为秒。"
+               "每段首个波峰不产生间隔，不跨设备重启、数据缺口或不同信号计算和连线。")
+    if intervals.empty:
+        st.info("当前视图尚无有效间隔：同一连续片段内至少需要两个不同时间的波峰。")
+    else:
+        fig, ax = plt.subplots(figsize=(12, 3))
+        series = intervals.groupby(groups, sort=False) if groups else [(0, intervals)]
+        for index, (_, frame) in enumerate(series):
+            ax.plot(frame["time"], frame["delta_t"], color="darkorange", marker="o",
+                    markersize=4, label="Peak interval" if index == 0 else None)
+        ax.axhline(average, color="gray", linestyle="--", label=f"Mean: {average:.3f} s")
+        ax.set(xlabel="Device-relative time (s)", ylabel=r"$\Delta t$ (s)", ylim=(0, None))
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        with st.expander("间隔数据（当前视图）"):
+            st.dataframe(intervals, hide_index=True)
+            st.download_button("下载当前视图间隔 CSV", intervals.to_csv(index=False).encode("utf-8"),
+                               "peak_intervals.csv", "text/csv")
     with st.expander("波峰位置"):
         st.dataframe(peaks[[*groups, "time", "filtered_acceleration"]], hide_index=True)
     st.caption("波峰数量不是已验证的跳绳次数。实时窗口采用零相位离线滤波，窗口边缘的结果可能随新数据变化。")

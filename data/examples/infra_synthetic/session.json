@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "protocol_version": 1,
+  "capture_id": "synthetic-fixture-v1",
+  "status": "stopped",
+  "owner": [
+    "synthetic-imu",
+    "127.0.0.1"
+  ],
+  "started_at_utc": "2023-11-14T22:13:20+00:00",
+  "ended_at_utc": "2023-11-14T22:13:48+00:00",
+  "synthetic": true,
+  "labels": {
+    "participant": "SYNTHETIC",
+    "activity": "synthetic-sine",
+    "notes": "人工构造六轴与峰时刻，非真实跳绳、非真实识别精度证据。佩戴：不适用。"
+  },
+  "units": {
+    "acceleration": "g",
+    "angular_velocity": "deg/s",
+    "time": "device-relative seconds"
+  },
+  "counts": {
+    "packets": 775,
+    "gaps": 25,
+    "restarts": 1
+  },
+  "target_sample_rate_hz": 50
+}

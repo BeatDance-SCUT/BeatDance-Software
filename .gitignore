@@ -15,3 +15,8 @@ Thumbs.db
 # New simulation/benchmark runs; the original baseline remains versioned.
 /results/simulations/
 /results/algorithm_runs/
+
+# Local workbench labels, dataset snapshots and experiment artifacts need backups.
+/data/annotations/
+/data/datasets/
+/results/experiments/
