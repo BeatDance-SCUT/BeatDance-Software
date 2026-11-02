@@ -1,86 +1,66 @@
-# IMU-Based Jump Rope Monitoring System
-# 基于 IMU 的跳绳监测系统
+# BeatDance — IMU 跳绳运动监测软件
 
----
+软件接收 ESP32 的六轴 IMU UDP v1 JSON，**先保存 CSV，再从 CSV 读取并显示**。支持实时曲线、加速度滤波、波峰分析、批次归档与历史下载。
 
-## 1. Project Overview | 项目介绍
+## 快速启动
 
-This project aims to develop an IMU-based jump rope monitoring system. It uses motion sensor data to analyze movement patterns and estimate exercise frequency.
+在仓库根目录执行：
 
-The software component is responsible for signal processing, peak detection, frequency estimation, and data visualization.
-
-本项目旨在开发一套基于 IMU（惯性测量单元）的跳绳监测系统，通过采集运动传感器数据，分析运动模式并估计运动频率。
-
-软件部分主要负责信号处理、波峰检测、频率估计以及数据可视化。
-
-## 2. Main Features | 主要功能
-
-- **Signal Processing | 信号处理：** Apply a low-pass Butterworth filter to reduce noise.
-- **Peak Detection | 波峰检测：** Detect peaks in the filtered acceleration signal.
-- **Frequency Estimation | 频率估计：** Estimate movement frequency based on the time intervals between adjacent peaks.
-- **Data Visualization | 数据可视化：** Display raw and filtered signals, detected peaks, and statistical results.
-- **Interactive Dashboard | 交互式仪表盘：** Use Streamlit to provide a web-based visualization interface.
-
-## 3. Project Structure | 项目结构
-
-| File / Folder 文件或文件夹 | Description 说明 |
-|---|---|
-| `app.py` | Streamlit 网页可视化界面 |
-| `peak_detection.py` | 信号滤波与波峰检测 |
-| `test_algorithm.py` | 算法性能测试 |
-| `analysis_result.csv` | 信号处理结果数据 |
-| `test_results.csv` | 算法测试结果 |
-| `noise_test_results.png` | 噪声测试结果图 |
-| `个人工作（数据，代码ect）/` | 个人工作及相关代码 |
-| `项目记录（参考文献）/` | 项目记录与参考文献 |
-
-## 4. Environment Setup | 环境配置
-
-Install the required Python packages:
-
-安装项目所需的 Python 库：
-
-```bash
-pip install numpy pandas scipy matplotlib streamlit
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+.\.venv\Scripts\python -m streamlit run app.py
 ```
 
-## 5. How to Run | 运行方法
+已有环境可直接执行最后一条。默认显示模拟分析 CSV；在侧栏切换“UDP 实时采集”可开始硬件采集，切换“历史采集”可回看和下载。
 
-Run the signal processing script:
+硬件与电脑需要连接可互通的同一 Wi-Fi。硬件固件中的 `PC_IP` 设为本机局域网 IPv4，`PC_PORT` 与软件端口一致（默认 `5005`）。完整步骤及排查见 [运行说明](docs/RUNNING.md)。
 
-运行信号处理程序：
+## 文件放在哪里
 
-```bash
-python peak_detection.py
+| 位置 | 内容 |
+| --- | --- |
+| `app.py` | 网页启动入口 |
+| `beatdance/` | UDP 接收、CSV 处理、信号分析和统一路径 |
+| `scripts/` | 模拟信号与噪声基准脚本 |
+| `tests/` | UDP、CSV、算法和界面回归 |
+| `data/examples/` | 版本管理的模拟 CSV 示例 |
+| `data/recordings/` | 按 UTC 日期和唯一批次保存采集数据 |
+| `results/algorithm_baseline/` | 原项目的算法结果与结果图 |
+| `results/simulations/`、`results/algorithm_runs/` | 新运行生成的独立结果批次 |
+| `docs/` | 运行说明、数据格式和文件导航 |
+| `docs/reports/phase_1/`、`phase_2/` | 原有中英文阶段报告和截图 |
+
+完整文件树和旧路径对照见 [仓库结构](docs/REPOSITORY_LAYOUT.md)，报告逐项索引见 [阶段材料](docs/reports/README.md)。
+
+## 数据归档
+
+每次开始新采集自动创建一个独立目录：
+
+```text
+data/recordings/YYYY-MM-DD/HHMMSS_微秒_随机编号/
+├── imu_raw.csv                # 完整已接受原始六轴样本
+├── session.json               # 参与者、动作标签、备注、单位和质量统计
+└── analysis_magnitude.csv     # 停止后生成的完整合加速度分析
 ```
 
-Start the web dashboard:
+原始数据和派生分析分开保存。历史页还能生成 X/Y/Z 单轴完整分析。采集批次默认不进入 Git，需单独备份。字段、单位、标签和机器学习使用建议见 [数据格式](docs/DATA_FORMAT.md)。
 
-启动网页可视化界面：
+## 开发命令
 
-```bash
-streamlit run app.py
+```powershell
+# 自动回归
+.\.venv\Scripts\python -m unittest discover -s tests -v
+
+# 模拟信号，结果写入 results/simulations/ 下的新批次
+.\.venv\Scripts\python -m scripts.simulate_imu
+
+# 噪声基准，结果写入 results/algorithm_runs/ 下的新批次
+.\.venv\Scripts\python -m scripts.benchmark_algorithm
 ```
 
-Then open the local URL displayed in the terminal.
+脚本支持 `--no-show` 和 `--output-dir`，详见 [运行说明](docs/RUNNING.md)。
 
-随后在浏览器中打开终端显示的本地网址。
+## 当前验证范围
 
-## 6. Current Development Status | 当前开发进度
-
-- Completed initial signal processing using simulated IMU data.
-  - 已完成基于模拟 IMU 数据的初步信号处理。
-- Implemented low-pass filtering and peak detection.
-  - 已实现低通滤波与波峰检测。
-- Completed preliminary algorithm tests under different noise levels.
-  - 已完成不同噪声水平下的初步算法测试。
-- Developed an initial Streamlit visualization dashboard.
-  - 已完成初版 Streamlit 网页可视化界面。
-- Real-world IMU data validation and hardware integration are still in progress.
-  - 真实 IMU 数据验证与硬件集成仍在进行中。
-
-## 7. Notes | 注意事项
-
-Current algorithm results are based on simulated data. Performance with real jump rope motion data has not yet been verified.
-
-目前的算法测试结果基于模拟数据，尚未通过真实跳绳运动数据验证其实际性能。
+已实现模拟信号分析、UDP v1 协议接入、CSV 持久化、实时显示和历史归档，并有本机 UDP 与界面回归测试。ESP32 实物网络联调和真实跳绳识别精度仍待验证；检测波峰不能直接当作真实跳绳次数或动作标注。

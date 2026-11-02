@@ -6,6 +6,10 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
-
-# Exclude project records and references
-项目记录（参考文献）/
+.tmp/
+# Captured training data stays local; preserve it outside Git in backups.
+/data/recordings/*
+!/data/recordings/.gitkeep
+# New simulation/benchmark runs; the original baseline remains versioned.
+/results/simulations/
+/results/algorithm_runs/
