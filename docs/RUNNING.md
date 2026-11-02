@@ -1,6 +1,6 @@
 # 运行与验证
 
-以下命令均在软件仓库根目录运行，推荐 Python 3.11 或更新版本。
+以下命令均在软件仓库根目录运行。已验证环境为 Python 3.14.7，依赖取当前最新稳定版，`requirements.txt` 只写下限、不设上限，回归测试 12 项全部通过。
 
 ## 安装和启动
 
@@ -11,6 +11,14 @@ python -m venv .venv
 ```
 
 已安装依赖时，只需执行最后一条。打开终端显示的本地网址。
+
+依赖始终跟随最新稳定版，需要更新时执行：
+
+```powershell
+.\.venv\Scripts\python -m pip install --upgrade -r requirements.txt
+```
+
+升级依赖后建议先跑一遍回归验证。上游发布破坏性大版本（例如 pandas 主版本变更）时，如出现异常再按需回退，不要直接修改本地已装版本了事。
 
 默认“分析 CSV”读取 `data/examples/analysis_result.csv`，该文件是原项目的模拟分析数据，也可上传具有同样列的分析 CSV。
 

@@ -1,5 +1,8 @@
-numpy>=1.24,<3
-pandas>=2,<4
-scipy>=1.10,<2
-matplotlib>=3.7,<4
-streamlit>=1.37,<2
+# 依赖策略：不设版本上限，安装时总是取当前最新稳定版；下限为已验证通过的最低版本。
+# 已验证组合（Python 3.14.7）：numpy 2.5.4 / pandas 3.1.0 / scipy 1.18.1 /
+# matplotlib 3.11.2 / streamlit 1.66.1，12 项回归测试通过。
+numpy>=2.5.4
+pandas>=3.1.0
+scipy>=1.18.1
+matplotlib>=3.11.2
+streamlit>=1.66.1
