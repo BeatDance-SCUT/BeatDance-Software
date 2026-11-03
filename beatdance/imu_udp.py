@@ -64,44 +64,50 @@ def read_capture_rows(path, max_rows=30000):
 
 @dataclass(frozen=True)
 class IMUSample:
-    device: str
     seq: int
-    t_ms: int
-    imu_id: str
-    ax_g: float
-    ay_g: float
-    az_g: float
-    gx_dps: float
-    gy_dps: float
-    gz_dps: float
-    temp_c: float
+    t_us: int
+    ax: float
+    ay: float
+    az: float
+    gx: float
+    gy: float
+    gz: float
 
 
 def parse_packet(packet):
-    """Validate one UTF-8 JSON datagram against the firmware's v1 schema."""
+    """Validate one UDP v1 JSON datagram from the ESP32."""
     try:
         obj = json.loads(packet.decode("utf-8"))
+
         if not isinstance(obj, dict) or type(obj.get("v")) is not int or obj["v"] != 1:
             raise ValueError("unsupported protocol version")
-        if not isinstance(obj["device"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", obj["device"]):
-            raise ValueError("device must be a single-line ID (letters, digits, _, . or -)")
-        for key in ("seq", "t_ms"):
-            if type(obj[key]) is not int or not 0 <= obj[key] < UINT32:
-                raise ValueError(f"{key} must be uint32")
-        if obj["imu_id"] not in ("0x70", "0x71"):
-            raise ValueError("unsupported IMU")
-        six = []
-        for key in ("acc_g", "gyro_dps"):
-            vector = obj[key]
-            if not isinstance(vector, list) or len(vector) != 3:
-                raise ValueError(f"{key} must contain three numbers")
-            six.extend(vector)
-        numbers = [*six, obj["temp_c"]]
-        if any(type(value) not in (int, float) or not math.isfinite(value)
-               for value in numbers):
-            raise ValueError("sensor values must be finite numbers")
-        return IMUSample(obj["device"], obj["seq"], obj["t_ms"], obj["imu_id"],
-                         *(float(value) for value in numbers))
+
+        if type(obj.get("seq")) is not int or not 0 <= obj["seq"] < 2**16:
+            raise ValueError("seq must be uint16")
+
+        if type(obj.get("t_us")) is not int or not 0 <= obj["t_us"] < 2**32:
+            raise ValueError("t_us must be uint32")
+
+        keys = ("ax", "ay", "az", "gx", "gy", "gz")
+        values = []
+
+        for key in keys:
+            value = obj.get(key)
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError(f"{key} must be a finite number")
+            values.append(float(value))
+
+        return IMUSample(
+            seq=obj["seq"],
+            t_us=obj["t_us"],
+            ax=values[0],
+            ay=values[1],
+            az=values[2],
+            gx=values[3],
+            gy=values[4],
+            gz=values[5],
+        )
+
     except (KeyError, TypeError, UnicodeDecodeError, OverflowError, RecursionError) as exc:
         raise ValueError("invalid IMU packet") from exc
 
@@ -117,7 +123,7 @@ class UDPReceiver:
         self._arrivals = deque(maxlen=10000)
         self._owner = None
         self._previous = None
-        self._elapsed_ms = 0
+        self._elapsed_us = 0
         self._segment = 0
         self._last_receive = None
         self._heartbeat = time.monotonic()
@@ -241,42 +247,73 @@ class UDPReceiver:
 
     def _accept(self, sample, sender_ip, now, pc_time):
         with self._lock:
-            owner = (sample.device, sender_ip)
-            if self._owner is not None and owner != self._owner:
-                self._counts["ignored_device"] += 1
+            owner = sender_ip
+
+        if self._owner is not None and owner != self._owner:
+            self._counts["ignored_device"] += 1
+            return
+
+        gap = 0
+
+        if self._previous is not None:
+            previous = self._previous
+
+            # seq 是 uint16，范围 0 ~ 65535
+            delta_seq = (sample.seq - previous.seq) % (2**16)
+
+            # t_us 是 uint32，范围 0 ~ 2**32-1
+            delta_us = (sample.t_us - previous.t_us) % (2**32)
+
+            # 如果两个计数器都明显倒退，且中间至少间隔 2 秒，
+            # 暂时判断为设备重启。
+            reboot = (
+                delta_seq >= 2**15
+                and sample.seq < previous.seq
+                and sample.t_us < previous.t_us
+                and delta_us >= 2**31
+                and now - self._last_receive >= 2
+            )
+
+            if reboot:
+                self._segment += 1
+                self._elapsed_us = 0
+                self._counts["restarts"] += 1
+
+            elif (
+                delta_seq == 0
+                or delta_seq >= 2**15
+                or not 0 < delta_us < 2**31
+            ):
+                self._counts["out_of_order"] += 1
                 return
-            gap = 0
-            if self._previous is not None:
-                delta_seq = (sample.seq - self._previous.seq) % UINT32
-                delta_ms = (sample.t_ms - self._previous.t_ms) % UINT32
-                # Backward counters after >=2 s without an accepted sample are
-                # treated as a reboot. Ordinary duplicates/reordering are dropped.
-                reboot = (delta_seq >= UINT32 // 2
-                          and sample.seq < self._previous.seq
-                          and sample.t_ms < self._previous.t_ms
-                          and delta_ms >= UINT32 // 2
-                          and now - self._last_receive >= 2)
-                if reboot:
-                    self._segment += 1
-                    self._elapsed_ms = 0
-                    self._counts["restarts"] += 1
-                elif delta_seq == 0 or delta_seq >= UINT32 // 2 or not 0 < delta_ms < UINT32 // 2:
-                    self._counts["out_of_order"] += 1
-                    return
-                else:
-                    self._elapsed_ms += delta_ms
-                    gap = delta_seq - 1
-            record = asdict(sample)
-            record.update(pc_time=pc_time, sender_ip=sender_ip, v=1, seq_gap=gap,
-                          segment=self._segment, time=self._elapsed_ms / 1000)
-            self._writer.writerow(record)
-            self._csv_file.flush()
-            self._owner = owner
-            self._previous = sample
-            self._last_receive = now
-            self._counts["packets"] += 1
-            self._counts["gaps"] += gap
-            self._arrivals.append(now)
+
+            else:
+                self._elapsed_us += delta_us
+                gap = delta_seq - 1
+
+        record = {
+            "host_s": pc_time,
+            "seg": self._segment,
+            "seq": sample.seq,
+            "t_us": sample.t_us,
+            "t_ms": sample.t_us // 1000,
+            "ax": sample.ax,
+            "ay": sample.ay,
+            "az": sample.az,
+            "gx": sample.gx,
+            "gy": sample.gy,
+            "gz": sample.gz,
+        }
+
+        self._writer.writerow(record)
+        self._csv_file.flush()
+
+        self._owner = owner
+        self._previous = sample
+        self._last_receive = now
+        self._counts["packets"] += 1
+        self._counts["gaps"] += gap
+        self._arrivals.append(now)
 
     def snapshot(self, read_rows=True):
         """Read persisted rows and counters; renew the browser's lease."""
