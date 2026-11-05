@@ -13,8 +13,17 @@ from uuid import uuid4
 
 import pandas as pd
 
-from beatdance.imu_udp import RAW_COLUMNS, parse_packet
+from beatdance.imu_udp import FLAT_AXES, RAW_COLUMNS, REBOOT_THRESHOLD, UINT32, parse_packet
 from beatdance.paths import PROJECT_ROOT
+from beatdance.recordings import normalize_frame
+
+
+LEGACY_RAW_COLUMNS = [
+    "pc_time", "device", "sender_ip", "seq", "t_ms", "imu_id",
+    "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps", "temp_c",
+    "v", "segment", "time", "seq_gap",
+]
+RAW_COLUMNS_WITHOUT_TIME = [key for key in RAW_COLUMNS if key != "time"]
 
 
 def utc_now():
@@ -78,7 +87,9 @@ def validate_capture(raw_bytes, metadata):
     if metadata.get("status") not in ("stopped", "error"):
         raise ValueError("only closed captures can be imported or used in datasets")
     reader = csv.DictReader(io.StringIO(raw_bytes.decode("utf-8-sig"), newline=""))
-    if reader.fieldnames != RAW_COLUMNS:
+    if reader.fieldnames in (RAW_COLUMNS, RAW_COLUMNS_WITHOUT_TIME):
+        return validate_flat_rows(reader)
+    if reader.fieldnames != LEGACY_RAW_COLUMNS:
         raise ValueError("raw CSV columns differ from the software capture contract")
     rows, owner, previous = [], None, None
     for line, row in enumerate(reader, 2):
@@ -91,6 +102,10 @@ def validate_capture(raw_bytes, metadata):
             for key in ("pc_time", "time", "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps", "temp_c"):
                 values[key] = number(row[key], key)
             ipaddress.IPv4Address(values["sender_ip"])
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", values["device"]):
+                raise ValueError("invalid device ID")
+            if values["imu_id"] not in ("0x70", "0x71"):
+                raise ValueError("invalid IMU ID")
             parse_packet(json.dumps({"v": values["v"], "device": values["device"], "seq": values["seq"],
                                     "t_ms": values["t_ms"], "imu_id": values["imu_id"],
                                     "acc_g": [values[k] for k in ("ax_g", "ay_g", "az_g")],
@@ -122,7 +137,44 @@ def validate_capture(raw_bytes, metadata):
     declared = metadata.get("owner")
     if owner and declared and list(owner) != list(declared):
         raise ValueError("session owner differs from CSV")
-    return pd.DataFrame(rows, columns=RAW_COLUMNS)
+    return pd.DataFrame(rows, columns=LEGACY_RAW_COLUMNS)
+
+
+def validate_flat_rows(reader):
+    """Check the persisted counters before normalizing flat CSVs for analysis."""
+    rows = []
+    previous = None
+    has_time = "time" in reader.fieldnames
+    elapsed_us = 0
+    for line, row in enumerate(reader, 2):
+        try:
+            if None in row or any(value is None for value in row.values()):
+                raise ValueError("incomplete CSV row")
+            values = {key: integer(row[key], key) for key in ("seg", "seq", "t_us", "t_ms")}
+            values.update({key: number(row[key], key) for key in ("host_s", *FLAT_AXES)})
+            segment, seq, t_us = values["seg"], values["seq"], values["t_us"]
+            if seq >= UINT32 or t_us >= UINT32 or values["t_ms"] != t_us // 1000:
+                raise ValueError("invalid raw counters")
+            if previous is not None and segment == previous["seg"]:
+                delta_seq = (seq - previous["seq"]) % UINT32
+                delta_us = (t_us - previous["t_us"]) % UINT32
+                if not 0 < delta_seq < REBOOT_THRESHOLD or not 0 < delta_us < REBOOT_THRESHOLD:
+                    raise ValueError("duplicate or out-of-order raw sample")
+                elapsed_us += delta_us
+            else:
+                expected_segment = 0 if previous is None else previous["seg"] + 1
+                if segment != expected_segment:
+                    raise ValueError("segments must be consecutive and start at zero")
+                elapsed_us = 0
+            if has_time:
+                values["time"] = number(row["time"], "time")
+                if not math.isclose(values["time"], elapsed_us / 1e6, rel_tol=0, abs_tol=1e-7):
+                    raise ValueError("raw timing mismatch")
+            previous = values
+            rows.append(values)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError(f"CSV line {line}: {exc}") from exc
+    return normalize_frame(pd.DataFrame(rows, columns=reader.fieldnames))
 
 
 class Store:

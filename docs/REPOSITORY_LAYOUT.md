@@ -5,6 +5,7 @@
 | 位置 | 职责 |
 | --- | --- |
 | `infra_app.py` | 独立 Streamlit 开发工作台入口，保留原 `app.py` |
+| `beatdance/capture_clock.py` | 两个采集入口共用的视频对时时间显示 |
 | `infra/store.py` | 原始采集校验、导入、标注版本与数据集快照 |
 | `infra/evaluation.py` | 按有效区域的一对一匹配与指标 |
 | `infra/experiments.py` | UI／CLI 共用的后台实验、互斥、取消、报告与导出 |

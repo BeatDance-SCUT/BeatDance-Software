@@ -73,6 +73,32 @@ class ContractTests(InfraCase):
             with self.assertRaises(ValueError):
                 self.store.capture_path(bad)
 
+    def test_flat_capture_preserves_bytes_and_recovers_time_across_wrap(self):
+        _, meta, _, _ = synthetic_fixture()
+        meta["owner"] = "127.0.0.1"
+        header = "host_s,seg,time,seq,t_us,t_ms,ax,ay,az,gx,gy,gz"
+        rows = [
+            "10,0,0,4294967295,4294967000,4294967,0,0,1,0,0,0",
+            "11,0,0.001,0,704,0,0,0,1,0,0,0",
+            "15,1,0,0,500,0,0,0,1,0,0,0",
+        ]
+        for has_time in (True, False):
+            with self.subTest(has_time=has_time):
+                lines = [header, *rows]
+                if not has_time:
+                    lines = [",".join(line.split(",")[:2] + line.split(",")[3:]) for line in lines]
+                raw = ("\n".join(lines) + "\n").encode("ascii")
+                key = self.store.import_capture(raw, meta)
+                frame, _, _ = self.store.capture(key)
+                self.assertEqual(frame.segment.tolist(), [0, 0, 1])
+                self.assertEqual(frame.time.tolist(), [0.0, 0.001, 0.0])
+                self.assertEqual(frame.az_g.tolist(), [1, 1, 1])
+                self.assertEqual((self.store.capture_path(key) / "imu_raw.csv").read_bytes(), raw)
+        for bad_row in (rows[0], rows[1].replace("0.001", "0.002")):
+            bad = ("\n".join([header, rows[0], bad_row]) + "\n").encode("ascii")
+            with self.subTest(bad_row=bad_row), self.assertRaises(ValueError):
+                validate_capture(bad, meta)
+
     def test_annotation_revisions_and_dataset_snapshots(self):
         key, first, dataset = self.demo()
         old_bytes = self.store.object_path("annotation", first["id"]).read_bytes()

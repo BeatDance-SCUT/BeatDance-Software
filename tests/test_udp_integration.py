@@ -242,6 +242,8 @@ class CaptureTests(unittest.TestCase):
             app.run()
             self.assertEqual(len(app.exception), 0)
             self.assertEqual(app.metric[0].value, "80")
+            saved_time = float(read_capture_rows(receiver.csv_path)[-1]["time"])
+            self.assertTrue(any(f"采集时间 {saved_time:.3f} s" in m.value for m in app.markdown))
             app.sidebar.button[1].click().run()
             self.assertEqual(len(app.exception), 0)
             original = receiver.csv_path.read_bytes()

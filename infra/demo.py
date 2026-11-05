@@ -4,13 +4,12 @@ import csv
 import io
 import math
 
-from beatdance.imu_udp import RAW_COLUMNS
-from .store import Store
+from .store import LEGACY_RAW_COLUMNS, Store
 
 
 def synthetic_fixture():
     stream = io.StringIO(newline="")
-    writer = csv.DictWriter(stream, fieldnames=RAW_COLUMNS)
+    writer = csv.DictWriter(stream, fieldnames=LEGACY_RAW_COLUMNS)
     writer.writeheader()
     events = []
     for segment in (0, 1):

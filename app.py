@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from beatdance.imu_udp import UDPReceiver
+from beatdance.capture_clock import render_capture_clock
 from beatdance.paths import DEFAULT_RECORDINGS, EXAMPLE_ANALYSIS
 from beatdance.recordings import SIGNALS, load_raw_csv, rows_to_frame, save_analysis
 from beatdance.signal_processing import analyze_imu, peak_intervals
@@ -183,6 +184,7 @@ elif mode == "UDP 实时采集":
             st.warning("尚未开始采集。将硬件 PC_IP 设为本机的局域网 IPv4，PC_PORT 与此处端口保持一致。")
             return
         rows, state = current.snapshot()
+        render_capture_clock(rows, state, current.capture_id)
         st.code(str(current.directory), language=None)
         if state["error"]:
             st.error(state["error"])

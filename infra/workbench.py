@@ -10,8 +10,9 @@ import pandas as pd
 import streamlit as st
 
 from beatdance.imu_udp import UDPReceiver
+from beatdance.capture_clock import render_capture_clock
 from beatdance.paths import PROJECT_ROOT
-from beatdance.recordings import rows_to_frame, save_analysis
+from beatdance.recordings import CANONICAL_ACCELERATION, CANONICAL_GYRO, rows_to_frame, save_analysis
 from beatdance.signal_processing import AlgorithmConfig
 from .demo import install_demo
 from .experiments import BusyError, ExperimentConfig, ExperimentJob, export_run
@@ -60,7 +61,7 @@ def time_window(frame, key, preferred=None):
         st.session_state[f"{key}_start"] = max(low, preferred[1] - 1)
         st.session_state[f"{key}_end"] = min(high, preferred[1] + 1)
     # Changing capture/segment resets bounds, avoiding stale values from prior data.
-    signature = (segment, low, high, str(part.iloc[0].device), len(part))
+    signature = (segment, low, high, len(part))
     if not preferred and (st.session_state.get(f"{key}_signature") != signature
                           or f"{key}_start" not in st.session_state or f"{key}_end" not in st.session_state):
         st.session_state[f"{key}_start"] = low
@@ -78,16 +79,7 @@ def time_window(frame, key, preferred=None):
 
 
 def raw_plot(frame, segment, start, end, annotation=None):
-    part = frame[frame["seg"] == segment].copy()
-
-    if part.empty:
-        st.info("窗口内没有样本。")
-        return
-
-    # 将设备时间戳转换为当前数据段内的相对时间（秒）
-    part["time"] = (part["t_us"] - part["t_us"].iloc[0]) / 1_000_000
-
-    part = part[part["time"].between(start, end)]
+    part = frame[(frame["segment"] == segment) & frame["time"].between(start, end)]
 
     if part.empty:
         st.info("窗口内没有样本。")
@@ -98,8 +90,8 @@ def raw_plot(frame, segment, start, end, annotation=None):
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(11, 4))
 
     for ax, columns, unit in (
-        (axes[0], ("ax", "ay", "az"), "g"),
-        (axes[1], ("gx", "gy", "gz"), "deg/s"),
+        (axes[0], CANONICAL_ACCELERATION, "g"),
+        (axes[1], CANONICAL_GYRO, "deg/s"),
     ):
         for index, block in enumerate(np.split(np.arange(len(part)), cuts)):
             display = part.iloc[block][::max(1, len(part) // 2000)]
@@ -169,11 +161,12 @@ def capture_page(store):
         @st.fragment(run_every=0.5 if running else None)
         def live():
             rows, state = receiver.snapshot()
+            render_capture_clock(rows, state, receiver.capture_id)
             st.json(state)
             if rows:
                 frame = rows_to_frame(rows)
-                segment = int(frame["seg"].iloc[-1])
-                last = float(frame[frame["seg"] == segment]["t_us"].max() / 1_000_000)
+                segment = int(frame["segment"].iloc[-1])
+                last = float(frame.loc[frame["segment"] == segment, "time"].max())
                 raw_plot(frame, segment, max(0, last - 10), last)
             if state["error"]:
                 st.error(state["error"])
