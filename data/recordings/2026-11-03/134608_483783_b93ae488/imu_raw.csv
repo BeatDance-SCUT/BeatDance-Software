@@ -1,0 +1,1 @@
+pc_time,device,sender_ip,seq,t_ms,imu_id,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps,temp_c,v,segment,time,seq_gap

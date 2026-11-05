@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "protocol_version": 1,
+  "capture_id": "142316_114779_9c81b87b",
+  "started_at_utc": "2026-11-03T14:23:16.114779+00:00",
+  "ended_at_utc": null,
+  "status": "recording",
+  "bind": "0.0.0.0",
+  "port": 5005,
+  "raw_file": "imu_raw.csv",
+  "columns": [
+    "host_s",
+    "seg",
+    "seq",
+    "t_us",
+    "t_ms",
+    "ax",
+    "ay",
+    "az",
+    "gx",
+    "gy",
+    "gz"
+  ],
+  "units": {
+    "pc_time": "Unix seconds (PC wall clock)",
+    "t_ms": "device uint32 milliseconds",
+    "time": "seconds since first accepted sample in each segment",
+    "acceleration": "g (includes gravity)",
+    "angular_velocity": "deg/s",
+    "temp_c": "deg C"
+  },
+  "target_sample_rate_hz": 100,
+  "owner": null,
+  "labels": {
+    "participant": "",
+    "activity": "jump-rope",
+    "notes": "佩戴：\n"
+  },
+  "sequence_policy": "First device+sender IP only; duplicates/reordering excluded. Backward counters after 2 s silence start a new segment.",
+  "data_validation": "Software capture only; motion/labels require experiment validation.",
+  "counts": {
+    "packets": 0,
+    "invalid": 0,
+    "ignored_device": 0,
+    "out_of_order": 0,
+    "gaps": 0,
+    "restarts": 0
+  },
+  "error": null
+}

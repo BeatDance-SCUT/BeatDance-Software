@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "protocol_version": 1,
+  "capture_id": "123720_008621_3bff6b92",
+  "started_at_utc": "2026-11-04T12:37:20.008621+00:00",
+  "ended_at_utc": "2026-11-04T12:38:44.600087+00:00",
+  "status": "stopped",
+  "bind": "0.0.0.0",
+  "port": 5005,
+  "raw_file": "imu_raw.csv",
+  "columns": [
+    "host_s",
+    "seg",
+    "time",
+    "seq",
+    "t_us",
+    "t_ms",
+    "ax",
+    "ay",
+    "az",
+    "gx",
+    "gy",
+    "gz"
+  ],
+  "units": {
+    "pc_time": "Unix seconds (PC wall clock)",
+    "t_ms": "device uint32 milliseconds",
+    "time": "seconds since first accepted sample in each segment",
+    "acceleration": "g (includes gravity)",
+    "angular_velocity": "deg/s",
+    "temp_c": "deg C"
+  },
+  "target_sample_rate_hz": 100,
+  "owner": "10.145.121.32",
+  "labels": {
+    "participant": "",
+    "activity": "",
+    "notes": ""
+  },
+  "sequence_policy": "First device+sender IP only; duplicates/reordering excluded. Backward counters after 2 s silence start a new segment.",
+  "data_validation": "Software capture only; motion/labels require experiment validation.",
+  "counts": {
+    "packets": 2174,
+    "invalid": 0,
+    "ignored_device": 0,
+    "out_of_order": 0,
+    "gaps": 14,
+    "restarts": 0
+  },
+  "error": null,
+  "derived_files": {
+    "analysis_magnitude.csv": {
+      "created_at_utc": "2026-11-04T12:38:44.641721+00:00",
+      "signal": "Magnitude",
+      "acceleration_unit": "m/s^2",
+      "input": "imu_raw.csv (all accepted samples)",
+      "rows": 2188,
+      "filter": "4th order Butterworth, cutoff=min(5 Hz, 0.4*fs), zero-phase sosfiltfilt",
+      "resampling": "median device-time spacing per continuous span; linear interpolation",
+      "max_gap_seconds": 0.2,
+      "minimum_span_seconds": 1,
+      "peak_prominence_m_s2": 0.7,
+      "peak_min_distance_samples": "max(1, int(fs/2.5))",
+      "note": "Short spans also need >15 samples for filtering. Peaks are algorithm outputs, not labels."
+    }
+  }
+}
