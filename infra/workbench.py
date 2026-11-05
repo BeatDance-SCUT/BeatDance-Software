@@ -1,4 +1,4 @@
-"""Five-page local research UI. Background workers never call Streamlit."""
+"""Local research UI. Background workers never call Streamlit."""
 
 import json
 import os
@@ -17,9 +17,10 @@ from beatdance.signal_processing import AlgorithmConfig
 from .demo import install_demo
 from .experiments import BusyError, ExperimentConfig, ExperimentJob, export_run
 from .store import Store, read_json
+from .video_review import video_review_page
 
 
-PAGES = ("采集", "数据", "标注", "实验", "对比")
+PAGES = ("采集", "数据", "标注", "实验", "对比", "视频复核")
 EVENT_COLUMNS = ["segment", "time"]
 INTERVAL_COLUMNS = ["segment", "start", "end", "kind"]
 
@@ -461,6 +462,6 @@ def main():
         st.info(st.session_state.pop("infra_notice"))
     try:
         {"采集": capture_page, "数据": data_page, "标注": annotation_page,
-         "实验": experiment_page, "对比": comparison_page}[page](store)
+         "实验": experiment_page, "对比": comparison_page, "视频复核": video_review_page}[page](store)
     except (OSError, ValueError, KeyError, TypeError, BusyError) as exc:
         st.error(f"操作未完成：{exc}")

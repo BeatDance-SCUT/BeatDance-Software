@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>动随节拍 · 视频复核</title>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}body{font:15px system-ui,sans-serif;margin:0;padding:16px;color:#17283d;background:#f4f7fb}
+section{background:white;border:1px solid #dbe3ee;border-radius:12px;padding:14px;margin-bottom:12px}
+h2{margin:0 0 8px;font-size:20px}p{margin:8px 0}.muted{color:#52657b;font-size:13px}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}label{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap}
+input[type=number]{width:104px}input,select,button{font:inherit;padding:6px;border:1px solid #bdcddd;border-radius:6px}
+button{background:#edf3fc;color:#183f73;cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary{background:#185dc1;color:white}
+.panels{display:grid;grid-template-columns:minmax(250px,1fr) minmax(350px,1.4fr);gap:12px}
+video{width:100%;height:300px;background:#101a29}canvas{width:100%;height:300px;display:block;cursor:crosshair}
+#clock{font:600 18px ui-monospace,monospace;margin:8px 0}#status{color:#805400}#scrub{width:100%}
+table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;padding:5px;border-bottom:1px solid #dde5ef}
+.scroll{max-height:200px;overflow:auto}.tag{color:#b32232}#identity{overflow-wrap:anywhere}
+@media(max-width:850px){.panels{grid-template-columns:1fr}video{height:240px}}
+</style></head><body>
+<script id="review-data" type="application/json">__REVIEW_DATA__</script>
+<section><h2>视频与波形同步复核</h2><p id="identity" class="muted"></p>
+<div class="row"><label>选择本地视频 <input id="file" type="file" accept="video/*"></label>
+<label>恢复对齐／复核记录 <input id="restore" type="file" accept=".json,application/json"></label></div>
+<p class="muted">视频保留在本机。推荐浏览器可解码的 MP4；若画面无法播放，请先转码为 H.264 MP4。切换页面前导出记录。</p></section>
+<section><div class="row">
+<label>视频时刻 V₁ / 秒 <input id="v1" type="number" min="0" step="0.001" value="0"></label>
+<button id="use1">取当前视频时刻</button>
+<label>屏幕采集时间 D₁ / 秒 <input id="d1" type="number" min="0" step="0.001" value="0"></label>
+<label><input id="two" type="checkbox">用首尾两个点校正漂移</label></div>
+<div id="second" class="row" hidden style="margin-top:8px">
+<label>视频时刻 V₂ / 秒 <input id="v2" type="number" min="0" step="0.001" value="10"></label><button id="use2">取当前视频时刻</button>
+<label>屏幕采集时间 D₂ / 秒 <input id="d2" type="number" min="0" step="0.001" value="10"></label></div>
+<p><button id="align" class="primary">应用对齐</button> <span id="formula">尚未对齐，请填写同步点。</span></p>
+<p class="muted">视频时刻从视频开头算起。屏幕时间存在刷新和网络延迟，本页按输入值对齐；请再用明显动作检查并微调。设备重启的片段分别对齐。</p></section>
+<section><div class="panels"><div><video id="video" controls preload="metadata" playsinline></video><p id="videoInfo" class="muted">尚未选择视频</p></div>
+<div><div id="clock">视频 — · 采集 —</div><canvas id="wave" aria-label="同步波形，点击跳转视频"></canvas>
+<p class="muted">浅灰：原始合加速度／所选轴；蓝：滤波信号；红点：算法候选波峰；橙线：复核标记；游标跟随视频。数据缺口不连线。</p></div></div>
+<input id="scrub" aria-label="视频进度" type="range" min="0" max="1" step="0.001" value="0" disabled>
+<div class="row"><button id="play">播放／暂停</button><button id="back">后退一步</button><button id="forward">前进一步</button>
+<label>步长 / 秒 <input id="step" type="number" min="0.001" step="0.001" value="0.033333"></label>
+<label>速度 <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option></select></label>
+<label>波形窗口 / 秒 <select id="window"><option>4</option><option selected>10</option><option>20</option><option>60</option></select></label>
+<button id="prev">上一个波峰</button><button id="next">下一个波峰</button></div>
+<p id="status" role="status">请选择视频并应用对齐。</p><p id="counts"></p></section>
+<section><h2>复核记录</h2><div class="row"><label>类型 <select id="kind"><option value="疑似漏计">疑似漏计</option><option value="疑似多计">疑似多计</option><option value="真实动作">真实动作</option><option value="其他">其他</option></select></label>
+<label>备注 <input id="note" placeholder="如：停顿、甩手、绊绳"></label><button id="mark">记录当前时刻</button>
+<button id="save">导出对齐与复核 JSON</button><button id="csv">导出复核 CSV</button></div>
+<p class="muted">疑似错误需人工确认；算法波峰不等于真实动作。“真实动作”也只是本页人工记录，尚未导入工作台评分标注。</p>
+<div class="scroll"><table><thead><tr><th>视频秒</th><th>采集秒</th><th>类型</th><th>备注</th><th>操作</th></tr></thead><tbody id="marks"></tbody></table></div></section>
+<script>
+"use strict";
+const DATA=JSON.parse(document.getElementById('review-data').textContent);
+const $=id=>document.getElementById(id), video=$('video'), canvas=$('wave'), ctx=canvas.getContext('2d');
+const peaks=DATA.spans.flatMap(span=>span.filter(p=>p[3]===1));
+let mapping=null, videoMeta=null, objectUrl=null, marks=[], viewStart=0, viewEnd=10;
+$('identity').textContent=`采集 ${DATA.capture_key} · 片段 ${DATA.segment} · ${DATA.algorithm.signal} · 数据 ${DATA.low.toFixed(3)}–${DATA.high.toFixed(3)} s`;
+$('d1').value=DATA.low; $('d2').value=Math.min(DATA.high, DATA.low+10);
+function message(text){$('status').textContent=text;}
+function finiteInput(id){const el=$(id); if(el.value.trim()==='')throw Error('请完整填写同步点'); const n=Number(el.value);if(!Number.isFinite(n)||n<0)throw Error('时间必须是非负有限秒数');return n;}
+function makeMapping(v1,d1,v2=null,d2=null){
+ if(![v1,d1].every(Number.isFinite)||v1<0||d1<DATA.low||d1>DATA.high)throw Error('第一个采集时间必须位于所选片段内');
+ let scale=1;if(v2!==null){if(![v2,d2].every(Number.isFinite)||v2<=v1||d2<=d1||d2>DATA.high)throw Error('第二同步点必须晚于第一点，且采集时间位于片段内');scale=(d2-d1)/(v2-v1);}
+ if(!Number.isFinite(scale)||scale<=0)throw Error('同步点产生了无效的时间比例');
+ if(Number.isFinite(video.duration)&&(v1>video.duration||(v2!==null&&v2>video.duration)))throw Error('同步点超过视频长度');
+ return {v1,d1,v2,d2,scale,offset:d1-scale*v1};
+}
+function deviceTime(t){return mapping.scale*t+mapping.offset;}
+function videoTime(t){return (t-mapping.offset)/mapping.scale;}
+function applyMapping(m){mapping=m;$('formula').textContent=`采集时间 = ${m.scale.toFixed(8)} × 视频时间 ${m.offset<0?'−':'+'} ${Math.abs(m.offset).toFixed(3)} s`;
+ if(marks.length)message('对齐已更新，已有标记的采集时间随之重算。');else message('已对齐。拖动视频或点击波形可定位动作。');renderMarks();draw();}
+$('two').onchange=()=>{$('second').hidden=!$('two').checked;};
+$('align').onclick=()=>{try{applyMapping(makeMapping(finiteInput('v1'),finiteInput('d1'),$('two').checked?finiteInput('v2'):null,$('two').checked?finiteInput('d2'):null));}catch(e){message(e.message);}};
+$('use1').onclick=()=>{$('v1').value=video.currentTime.toFixed(3);};$('use2').onclick=()=>{$('v2').value=video.currentTime.toFixed(3);};
+$('file').onchange=()=>{const file=$('file').files[0];if(!file)return;video.pause();if(objectUrl)URL.revokeObjectURL(objectUrl);
+ const next={name:file.name,size:file.size,lastModified:file.lastModified};
+ if(videoMeta&&JSON.stringify(next)!==JSON.stringify(videoMeta)){mapping=null;marks=[];$('formula').textContent='视频已更换，请重新应用对齐。';renderMarks();}
+ videoMeta=next;objectUrl=URL.createObjectURL(file);video.src=objectUrl;video.load();$('videoInfo').textContent=file.name;};
+video.addEventListener('loadedmetadata',()=>{$('scrub').disabled=false;$('scrub').max=video.duration;
+ $('videoInfo').textContent=`${videoMeta.name} · ${video.duration.toFixed(3)} s`;
+ if(mapping&&(mapping.v1>video.duration||(mapping.v2!==null&&mapping.v2>video.duration))){mapping=null;$('formula').textContent='同步点超过视频长度，请重新对齐。';}draw();});
+video.addEventListener('error',()=>message('视频无法解码。请换用 H.264 MP4；文件仍保留在本机。'));
+function seek(t){if(!Number.isFinite(video.duration)){message('请先选择并加载视频。');return;}video.currentTime=Math.max(0,Math.min(video.duration,t));draw();}
+$('scrub').oninput=()=>seek(Number($('scrub').value));
+$('play').onclick=()=>{if(!videoMeta){message('请先选择视频。');return;}if(video.paused)video.play().catch(e=>message(e.message));else video.pause();};
+function step(sign){const n=Number($('step').value);if(!Number.isFinite(n)||n<=0){message('步长必须大于零。');return;}video.pause();seek(video.currentTime+sign*n);}
+$('back').onclick=()=>step(-1);$('forward').onclick=()=>step(1);$('speed').onchange=()=>{video.playbackRate=Number($('speed').value);};
+function peakJump(direction){if(!mapping){message('请先应用对齐。');return;}const t=deviceTime(video.currentTime);
+ const eligible=peaks.filter(p=>videoTime(p[0])>=0&&videoTime(p[0])<=video.duration);
+ const p=direction>0?eligible.find(p=>p[0]>t+0.0001):eligible.findLast(p=>p[0]<t-0.0001);
+ if(p){video.pause();seek(videoTime(p[0]));}else message('这个方向没有视频覆盖的波峰。');}
+$('prev').onclick=()=>peakJump(-1);$('next').onclick=()=>peakJump(1);$('window').onchange=draw;
+function line(points,index,color,x,y){ctx.beginPath();ctx.strokeStyle=color;let begun=false;for(const p of points){if(p[0]<viewStart||p[0]>viewEnd)continue;if(!begun){ctx.moveTo(x(p[0]),y(p[index]));begun=true;}else ctx.lineTo(x(p[0]),y(p[index]));}ctx.stroke();}
+function draw(){
+ const w=Math.max(300,canvas.clientWidth),h=300,dpr=window.devicePixelRatio||1;if(canvas.width!==Math.round(w*dpr)||canvas.height!==h*dpr){canvas.width=Math.round(w*dpr);canvas.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+ const t=mapping?deviceTime(video.currentTime):DATA.low,width=Number($('window').value);viewStart=t-width/2;viewEnd=t+width/2;
+ const points=DATA.spans.flatMap(s=>s.filter(p=>p[0]>=viewStart&&p[0]<=viewEnd));let min=Infinity,max=-Infinity;
+ for(const p of points){min=Math.min(min,p[1],p[2]);max=Math.max(max,p[1],p[2]);}if(!points.length){min=0;max=1;}const pad=Math.max((max-min)*.12,.5);min-=pad;max+=pad;
+ const x=a=>50+(a-viewStart)/width*(w-65),y=a=>12+(max-a)/(max-min)*(h-45);
+ ctx.font='12px system-ui';ctx.lineWidth=1;for(let i=0;i<=4;i++){const yy=12+i*(h-45)/4;ctx.strokeStyle='#e0e7ef';ctx.beginPath();ctx.moveTo(50,yy);ctx.lineTo(w-15,yy);ctx.stroke();ctx.fillStyle='#52657b';ctx.fillText((max-i*(max-min)/4).toFixed(1),2,yy+4);const tt=viewStart+i*width/4;ctx.fillText(tt.toFixed(2),Math.min(w-45,Math.max(40,x(tt)-15)),h-8);}
+ for(const span of DATA.spans){line(span,1,'#acbaca',x,y);line(span,2,'#2167cd',x,y);}
+ for(const p of peaks){if(p[0]<viewStart||p[0]>viewEnd)continue;ctx.fillStyle='#d62e45';ctx.beginPath();ctx.arc(x(p[0]),y(p[2]),4,0,Math.PI*2);ctx.fill();}
+ if(mapping){for(const m of marks){const tt=deviceTime(m.video_time);if(tt<viewStart||tt>viewEnd)continue;ctx.strokeStyle='#d28c00';ctx.beginPath();ctx.moveTo(x(tt),12);ctx.lineTo(x(tt),h-33);ctx.stroke();}}
+ ctx.strokeStyle='#192d44';ctx.beginPath();ctx.moveTo(x(t),8);ctx.lineTo(x(t),h-30);ctx.stroke();
+ $('clock').textContent=`视频 ${video.currentTime.toFixed(3)} s · 采集 ${mapping?t.toFixed(3):'未对齐'} s`;
+ $('scrub').value=video.currentTime;
+ const count=peaks.filter(p=>p[0]>=viewStart&&p[0]<=viewEnd).length;
+ $('counts').textContent=`窗口内候选波峰：${count} · 片段内候选波峰总数：${peaks.length} · 横轴：采集时间 / s；纵轴：加速度 / m/s²`;
+ if(mapping&&(t<DATA.low||t>DATA.high))message('当前视频时刻不在所选数据片段范围内。');
+ else if(mapping&&!DATA.spans.some(s=>s[0][0]<=t&&t<=s[s.length-1][0]))message('当前时刻位于数据缺口，缺口内不插值。');
+ else if(mapping)message('已对齐 · 可点击波形跳转，或慢放观察动作。');
+}
+canvas.onclick=e=>{if(!mapping){message('请先应用对齐。');return;}const rect=canvas.getBoundingClientRect(),px=e.clientX-rect.left;if(px<50||px>rect.width-15)return;video.pause();seek(videoTime(viewStart+(px-50)/(rect.width-65)*(viewEnd-viewStart)));};
+function tick(){draw();if(!video.paused&&!video.ended)requestAnimationFrame(tick);}
+video.addEventListener('play',tick);for(const name of ['seeked','timeupdate','pause','ended'])video.addEventListener(name,draw);window.addEventListener('resize',draw);
+function renderMarks(){const body=$('marks');body.replaceChildren();marks.forEach((m,i)=>{const tr=document.createElement('tr');for(const value of [m.video_time.toFixed(3),mapping?deviceTime(m.video_time).toFixed(3):'未对齐',m.kind,m.note]){const td=document.createElement('td');td.textContent=value;tr.append(td);}const td=document.createElement('td'),jump=document.createElement('button'),del=document.createElement('button');jump.textContent='跳转';jump.onclick=()=>{video.pause();seek(m.video_time);};del.textContent='删除';del.onclick=()=>{marks.splice(i,1);renderMarks();draw();};td.append(jump,del);tr.append(td);body.append(tr);});}
+$('mark').onclick=()=>{if(!mapping||!videoMeta||!Number.isFinite(video.duration)){message('请先加载视频并应用对齐。');return;}const t=deviceTime(video.currentTime);if(t<DATA.low||t>DATA.high){message('当前时刻不在数据片段内，不能标记。');return;}marks.push({video_time:video.currentTime,kind:$('kind').value,note:$('note').value});marks.sort((a,b)=>a.video_time-b.video_time);renderMarks();draw();};
+function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+function record(){return {schema_version:1,capture_key:DATA.capture_key,raw_sha256:DATA.raw_sha256,segment:DATA.segment,algorithm:DATA.algorithm,video:videoMeta,mapping,marks:marks.map(m=>({...m,time:deviceTime(m.video_time)})),saved_at:new Date().toISOString()};}
+$('save').onclick=()=>{if(!mapping){message('请先应用对齐。');return;}download('video-review.json',JSON.stringify(record(),null,2),'application/json');};
+$('csv').onclick=()=>{if(!mapping){message('请先应用对齐。');return;}const escape=v=>'"'+String(v).replaceAll('"','""')+'"';const lines=[['capture_key','segment','video_time','time','kind','note'],...marks.map(m=>[DATA.capture_key,DATA.segment,m.video_time,deviceTime(m.video_time),m.kind,m.note])];download('video-review.csv','\ufeff'+lines.map(row=>row.map(escape).join(',')).join('\r\n'),'text/csv;charset=utf-8');};
+$('restore').onchange=async()=>{try{const file=$('restore').files[0];if(!file)return;const r=JSON.parse(await file.text());
+ if(r.schema_version!==1||r.capture_key!==DATA.capture_key||r.raw_sha256!==DATA.raw_sha256||r.segment!==DATA.segment)throw Error('记录与当前采集／片段不一致');
+ if(JSON.stringify(r.algorithm)!==JSON.stringify(DATA.algorithm))throw Error('分析参数与保存记录不一致，请先调整上方参数');
+ if(r.video&&videoMeta&&JSON.stringify(r.video)!==JSON.stringify(videoMeta))throw Error('当前视频与记录的视频信息不一致');
+ if(!r.mapping||!Array.isArray(r.marks))throw Error('记录缺少同步点或标记');
+ const m=makeMapping(r.mapping.v1,r.mapping.d1,r.mapping.v2,r.mapping.d2);
+ if(r.marks.some(x=>!Number.isFinite(x.video_time)||x.video_time<0||!['疑似漏计','疑似多计','真实动作','其他'].includes(x.kind)||typeof x.note!=='string'))throw Error('复核标记格式不合法');
+ marks=r.marks.map(x=>({video_time:x.video_time,kind:x.kind,note:x.note}));videoMeta=videoMeta||r.video;
+ $('v1').value=m.v1;$('d1').value=m.d1;$('two').checked=m.v2!==null;$('second').hidden=m.v2===null;if(m.v2!==null){$('v2').value=m.v2;$('d2').value=m.d2;}applyMapping(m);
+ }catch(e){message('恢复失败：'+e.message);}finally{$('restore').value='';}};
+draw();
+</script></body></html>

@@ -9,7 +9,9 @@
 | `infra/store.py` | 原始采集校验、导入、标注版本与数据集快照 |
 | `infra/evaluation.py` | 按有效区域的一对一匹配与指标 |
 | `infra/experiments.py` | UI／CLI 共用的后台实验、互斥、取消、报告与导出 |
-| `infra/workbench.py` | 采集、数据、标注、实验、对比五个页面 |
+| `infra/workbench.py` | 采集、数据、标注、实验、对比、视频复核六个页面 |
+| `infra/video_review.py`、`infra/video_review.html` | 视频复核页、对齐映射、视频驱动的波形游标与人工复核记录 |
+| `tests/test_video_review.py`、`tests/video_review_browser.test.cjs` | 复核数据保真、页面及浏览器同步逻辑回归 |
 | `infra/demo.py`、`data/examples/infra_synthetic/` | 明确标识的合成六轴和构造真值 |
 | `data/annotations/`、`data/datasets/` | 本地不可变版本与快照，默认不入 Git |
 | `results/experiments/` | 独立实验目录及进程级工作锁，默认不入 Git |
