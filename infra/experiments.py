@@ -11,6 +11,7 @@ import platform
 import subprocess
 import threading
 import traceback
+import time
 import zipfile
 import io
 
@@ -19,6 +20,7 @@ import pandas as pd
 from beatdance.paths import PROJECT_ROOT
 from beatdance.signal_processing import AlgorithmConfig, analyze_imu
 from .evaluation import evaluate_events, summarize
+from beatdance.counting import detect, PRESETS, validate_params, DetectionResult
 from .store import Store, digest, new_id, number, read_json, utc_now, write_json
 
 
@@ -33,23 +35,29 @@ CASE_COLUMNS = ["selection", "capture_key", "segment", "span", "region", "kind",
 class ExperimentConfig:
     algorithm: AlgorithmConfig = field(default_factory=AlgorithmConfig)
     tolerance_seconds: float = 0.1
+    algorithm_id: str = ALGORITHM_ID
+    detector_params: dict = field(default_factory=dict)
 
     def __post_init__(self):
+        if self.algorithm_id not in PRESETS:
+            raise ValueError("unsupported algorithm")
+        validate_params(self.detector_params)
         if (isinstance(self.tolerance_seconds, bool) or not isinstance(self.tolerance_seconds, (int, float))
                 or number(self.tolerance_seconds, "tolerance") <= 0):
             raise ValueError("tolerance must be positive")
 
     def to_dict(self):
-        return {"algorithm_id": ALGORITHM_ID, "algorithm": self.algorithm.to_dict(),
+        return {"algorithm_id": self.algorithm_id, "detector_params": self.detector_params, "algorithm": self.algorithm.to_dict(),
                 "tolerance_seconds": self.tolerance_seconds}
 
     @classmethod
     def from_dict(cls, value):
-        if set(value) - {"algorithm_id", "algorithm", "tolerance_seconds"}:
+        if set(value) - {"algorithm_id", "algorithm", "tolerance_seconds", "detector_params"}:
             raise ValueError("unknown experiment configuration field")
-        if value.get("algorithm_id", ALGORITHM_ID) != ALGORITHM_ID:
+        if value.get("algorithm_id", ALGORITHM_ID) not in PRESETS:
             raise ValueError("unsupported algorithm")
-        return cls(AlgorithmConfig(**value.get("algorithm", {})), value.get("tolerance_seconds", 0.1))
+        return cls(AlgorithmConfig(**value.get("algorithm", {})), value.get("tolerance_seconds", 0.1),
+                   value.get("algorithm_id", ALGORITHM_ID), value.get("detector_params", {}))
 
 
 class BusyError(RuntimeError):
@@ -158,7 +166,7 @@ class ExperimentJob:
             self.directory = self.store.object_path("run", run_id)
             self.directory.mkdir(exist_ok=False)
             self.manifest = {"schema_version": 1, "id": run_id, "dataset_id": self.dataset_id,
-                             "algorithm_id": ALGORITHM_ID, "status": "queued", "created_at_utc": utc_now(),
+                             "algorithm_id": self.config.algorithm_id, "status": "queued", "created_at_utc": utc_now(),
                              "ended_at_utc": None, "completed": 0, "total": 0, "error": None,
                              "analysis_context": "whole source boot segment, split on gaps; crop outputs to selection",
                              "matching_policy": "chronological earliest feasible one-to-one, within inclusive tolerance"}
@@ -221,7 +229,15 @@ class ExperimentJob:
                 selected = frame[frame.segment == item["segment"]]
                 # Analyze the whole source segment for stable offline filter context,
                 # then crop outputs to the selection. No cross-gap filtering occurs.
-                analysis = analyze_imu(selected, config=self.config.algorithm)
+                started = time.perf_counter()
+                result = (DetectionResult(analyze_imu(selected, config=self.config.algorithm),
+                    pd.DataFrame(columns=["time", "span", "accepted", "reason"]))
+                    if self.config.algorithm_id == ALGORITHM_ID else
+                    detect(selected, self.config.algorithm, self.config.algorithm_id, self.config.detector_params))
+                elapsed = time.perf_counter() - started
+                self.manifest.setdefault("timings", []).append({"selection": index, "compute_seconds": elapsed})
+                analysis = result.analysis
+                result.candidates.to_csv(inputs / "candidates.csv", index=False)
                 analysis.insert(0, "segment", item["segment"])
                 analysis.insert(0, "signal", self.config.algorithm.signal)
                 spans = [(int(s), float(g.time.min()), float(g.time.max())) for s, g in analysis.groupby("span")]
@@ -237,7 +253,7 @@ class ExperimentJob:
                 analyses.append(analysis)
                 peaks.append(candidates)
                 cases.extend(matched)
-                per_selection.append({"selection": index, "capture_key": item["capture_key"], **metrics})
+                per_selection.append({"selection": index, "capture_key": item["capture_key"], "labels": meta.get("labels", {}), **metrics})
                 self.manifest["completed"] = index + 1
                 self._save_progress(analyses, peaks, cases, per_selection)
             self.manifest["status"] = "cancelled" if self.cancel_event.is_set() else "completed"

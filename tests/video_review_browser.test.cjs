@@ -6,11 +6,12 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const template=fs.readFileSync(path.join(__dirname,'../infra/video_review.html'),'utf8');
-function setup(){
+function setup(overrides={}){
  const elements=new Map(), data={schema_version:1,capture_key:'test/capture',raw_sha256:'abc',segment:0,algorithm:{signal:'Magnitude'},low:0,high:20,
  spans:[[[0,1,1,0],[2,3,2,1],[3,1,1,0]],[[7,1,1,0],[8,3,2,1],[20,1,1,0]]]};
+ Object.assign(data,overrides);
  const context=new Proxy({},{get:()=>()=>{}});
- function element(){return {value:'0',checked:false,textContent:'',files:[],children:[],clientWidth:650,currentTime:0,duration:30,paused:true,
+ function element(){return {style:{},value:'0',checked:false,textContent:'',files:[],children:[],clientWidth:650,currentTime:0,duration:30,paused:true,
    getContext:()=>context,addEventListener(name,fn){this[name]=fn;},append(...nodes){this.children.push(...nodes);},
    replaceChildren(){this.children=[];},getBoundingClientRect:()=>({left:0,width:650}),pause(){this.paused=true;},
    play(){this.paused=false;return Promise.resolve();},load(){},click(){},};}
@@ -55,4 +56,41 @@ test('restored records reject another capture and a changed video clears old ali
  run('applyMapping(makeMapping(0,0));videoMeta={name:"old",size:1,lastModified:1};marks=[{video_time:2,kind:"真实动作",note:""}]');
  e.get('file').files=[{name:'new',size:2,lastModified:2}];e.get('file').onchange();
  assert.equal(run('mapping'),null);assert.equal(run('marks.length'),0);
+});
+
+function comparisonData(){
+ const a=[[[0,1,1,0],[2,3,2,1],[3,1,1,0]],[[7,1,1,0],[8,3,2,1],[20,1,1,0]]];
+ const b=[[[0,1,1,0],[2,3,2,0],[3,1,1,1]],[[7,1,1,0],[8,3,2,1],[20,1,1,0]]];
+ return {tracks:[{id:'run-a',label:'A0',spans:a,errors:[]},{id:'run-b',label:'A1',spans:b,errors:[{time:2,kind:'false_negative'}]}],truth:[2,8],intervals:[{start:0,end:20,kind:'valid'}],
+ cases:[{time:2,kind:'false_negative',label:'B missed'},{time:100,kind:'false_positive',label:'outside'}],review_context:{selection:0,runs:['a','b']}};
+}
+test('comparison tracks share video cursor, active-track peak jumps and local case navigation',()=>{
+ const {elements:e,run}=setup(comparisonData());
+ assert.equal(e.get('comparison-controls').hidden,false);
+ assert.equal(e.get('active-track').children.length,2);
+ run('applyMapping(makeMapping(0,0))');
+ e.get('video').currentTime=1;e.get('video').timeupdate();
+ assert.match(e.get('clock').textContent,/1.000/);
+ assert.match(e.get('track-counts').textContent,/1:.*2:/);
+ e.get('active-track').value='1';e.get('active-track').onchange();
+ e.get('next').onclick();assert.equal(e.get('video').currentTime,3);
+ e.get('case-jump').value='0';e.get('case-jump').onchange();assert.equal(e.get('video').currentTime,2);
+ e.get('case-jump').value='1';e.get('case-jump').onchange();assert.equal(e.get('video').currentTime,2);
+ assert.match(e.get('status').textContent,/覆盖范围/);
+});
+test('comparison record binds run identity and restores matching records only',async()=>{
+ const {elements:e,run}=setup(comparisonData());
+ run('applyMapping(makeMapping(0,0))');
+ const record=run('record()');
+ assert.equal(record.review_context.runs[0],'a');
+ record.review_context={selection:0,runs:['different']};
+ e.get('restore').files=[{text:async()=>JSON.stringify(record)}];
+ await e.get('restore').onchange();assert.match(e.get('status').textContent,/实验或片段/);
+});
+test('comparison focus seeks only after alignment and keeps gap warnings',()=>{
+ const {elements:e,run}=setup({...comparisonData(),focus:8});
+ assert.equal(e.get('video').currentTime,0);
+ run('applyMapping(makeMapping(0,1))');
+ assert.equal(e.get('video').currentTime,7);
+ e.get('video').currentTime=4;run('draw()');assert.match(e.get('status').textContent,/缺口/);
 });

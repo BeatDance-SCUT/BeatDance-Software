@@ -39,6 +39,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
 <label>速度 <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>1.5</option><option>2</option></select></label>
 <label>波形窗口 / 秒 <select id="window"><option>4</option><option selected>10</option><option>20</option><option>60</option></select></label>
 <button id="prev">上一个波峰</button><button id="next">下一个波峰</button></div>
+<div id="comparison-controls" hidden><p class="muted">各算法独立轨道，绿线：人工动作；红点：检测事件；紫叉：漏检；浅绿／浅红背景：有效／排除区间。灰线为原始信号，彩线为滤波结果。</p><div class="row"><label>波峰跳转使用 <select id="active-track"></select></label><label>定位误检／漏检／差异 <select id="case-jump"></select></label></div><p id="track-counts" class="muted"></p></div>
 <p id="status" role="status">请选择视频并应用对齐。</p><p id="counts"></p></section>
 <section><h2>复核记录</h2><div class="row"><label>类型 <select id="kind"><option value="疑似漏计">疑似漏计</option><option value="疑似多计">疑似多计</option><option value="真实动作">真实动作</option><option value="其他">其他</option></select></label>
 <label>备注 <input id="note" placeholder="如：停顿、甩手、绊绳"></label><button id="mark">记录当前时刻</button>
@@ -49,7 +50,20 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
 "use strict";
 const DATA=JSON.parse(document.getElementById('review-data').textContent);
 const $=id=>document.getElementById(id), video=$('video'), canvas=$('wave'), ctx=canvas.getContext('2d');
-const peaks=DATA.spans.flatMap(span=>span.filter(p=>p[3]===1));
+const trackPeaks=(DATA.tracks||[]).map(track=>track.spans.flatMap(span=>span.filter(p=>p[3]===1)));
+let peaks=DATA.spans.flatMap(span=>span.filter(p=>p[3]===1)), pendingFocus=DATA.focus;
+if(DATA.tracks){
+ $('comparison-controls').hidden=false;
+ DATA.tracks.forEach((track,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=`${i+1}. ${track.label} · ${track.id}`;$('active-track').append(option);});
+ $('active-track').value='0';
+ $('active-track').onchange=()=>{peaks=trackPeaks[Number($('active-track').value)];draw();};
+ const empty=document.createElement('option');empty.value='';empty.textContent='选择后跳转视频';$('case-jump').append(empty);
+ (DATA.cases||[]).forEach((entry,i)=>{const option=document.createElement('option');option.value=String(i);option.textContent=`${entry.time.toFixed(3)} s · ${entry.label}`;$('case-jump').append(option);});
+ $('case-jump').value='';
+ $('case-jump').onchange=()=>{if($('case-jump').value==='')return;if(!mapping){message('请先应用对齐。');return;}const entry=DATA.cases[Number($('case-jump').value)];seekDevice(entry.time);};
+}
+function seekDevice(time){const target=videoTime(time);if(!Number.isFinite(video.duration)){message('请先选择并加载视频。');return;}if(target<0||target>video.duration){message('该事件不在视频覆盖范围内。');return;}video.pause();seek(target);}
+function applyFocus(){if(pendingFocus!=null&&mapping&&Number.isFinite(video.duration)){const focus=pendingFocus;pendingFocus=null;seekDevice(focus);}}
 let mapping=null, videoMeta=null, objectUrl=null, marks=[], viewStart=0, viewEnd=10;
 $('identity').textContent=`采集 ${DATA.capture_key} · 片段 ${DATA.segment} · ${DATA.algorithm.signal} · 数据 ${DATA.low.toFixed(3)}–${DATA.high.toFixed(3)} s`;
 $('d1').value=DATA.low; $('d2').value=Math.min(DATA.high, DATA.low+10);
@@ -65,7 +79,7 @@ function makeMapping(v1,d1,v2=null,d2=null){
 function deviceTime(t){return mapping.scale*t+mapping.offset;}
 function videoTime(t){return (t-mapping.offset)/mapping.scale;}
 function applyMapping(m){mapping=m;$('formula').textContent=`采集时间 = ${m.scale.toFixed(8)} × 视频时间 ${m.offset<0?'−':'+'} ${Math.abs(m.offset).toFixed(3)} s`;
- if(marks.length)message('对齐已更新，已有标记的采集时间随之重算。');else message('已对齐。拖动视频或点击波形可定位动作。');renderMarks();draw();}
+ if(marks.length)message('对齐已更新，已有标记的采集时间随之重算。');else message('已对齐。拖动视频或点击波形可定位动作。');renderMarks();draw();applyFocus();}
 $('two').onchange=()=>{$('second').hidden=!$('two').checked;};
 $('align').onclick=()=>{try{applyMapping(makeMapping(finiteInput('v1'),finiteInput('d1'),$('two').checked?finiteInput('v2'):null,$('two').checked?finiteInput('d2'):null));}catch(e){message(e.message);}};
 $('use1').onclick=()=>{$('v1').value=video.currentTime.toFixed(3);};$('use2').onclick=()=>{$('v2').value=video.currentTime.toFixed(3);};
@@ -75,7 +89,7 @@ $('file').onchange=()=>{const file=$('file').files[0];if(!file)return;video.paus
  videoMeta=next;objectUrl=URL.createObjectURL(file);video.src=objectUrl;video.load();$('videoInfo').textContent=file.name;};
 video.addEventListener('loadedmetadata',()=>{$('scrub').disabled=false;$('scrub').max=video.duration;
  $('videoInfo').textContent=`${videoMeta.name} · ${video.duration.toFixed(3)} s`;
- if(mapping&&(mapping.v1>video.duration||(mapping.v2!==null&&mapping.v2>video.duration))){mapping=null;$('formula').textContent='同步点超过视频长度，请重新对齐。';}draw();});
+ if(mapping&&(mapping.v1>video.duration||(mapping.v2!==null&&mapping.v2>video.duration))){mapping=null;$('formula').textContent='同步点超过视频长度，请重新对齐。';}draw();applyFocus();});
 video.addEventListener('error',()=>message('视频无法解码。请换用 H.264 MP4；文件仍保留在本机。'));
 function seek(t){if(!Number.isFinite(video.duration)){message('请先选择并加载视频。');return;}video.currentTime=Math.max(0,Math.min(video.duration,t));draw();}
 $('scrub').oninput=()=>seek(Number($('scrub').value));
@@ -88,7 +102,44 @@ function peakJump(direction){if(!mapping){message('请先应用对齐。');retur
  if(p){video.pause();seek(videoTime(p[0]));}else message('这个方向没有视频覆盖的波峰。');}
 $('prev').onclick=()=>peakJump(-1);$('next').onclick=()=>peakJump(1);$('window').onchange=draw;
 function line(points,index,color,x,y){ctx.beginPath();ctx.strokeStyle=color;let begun=false;for(const p of points){if(p[0]<viewStart||p[0]>viewEnd)continue;if(!begun){ctx.moveTo(x(p[0]),y(p[index]));begun=true;}else ctx.lineTo(x(p[0]),y(p[index]));}ctx.stroke();}
+function drawTracks(){
+ const w=Math.max(300,canvas.clientWidth), lane=170,h=lane*DATA.tracks.length+30,dpr=window.devicePixelRatio||1;
+ canvas.style.height=`${h}px`;
+ if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}
+ ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+ const t=mapping?deviceTime(video.currentTime):(DATA.focus??DATA.low),width=Number($('window').value);
+ viewStart=t-width/2;viewEnd=t+width/2;
+ const x=a=>50+(a-viewStart)/width*(w-65), colors=['#2167cd','#ab4f18','#7442a5','#00816d','#ba2847'];
+ const counts=[];
+ DATA.tracks.forEach((track,i)=>{
+  const top=i*lane+23,bottom=(i+1)*lane-20;
+  const points=track.spans.flatMap(span=>span.filter(p=>p[0]>=viewStart&&p[0]<=viewEnd));
+  let min=Infinity,max=-Infinity;for(const p of points){min=Math.min(min,p[1],p[2]);max=Math.max(max,p[1],p[2]);}
+  if(!points.length){min=0;max=1;}const pad=Math.max((max-min)*.1,.1);min-=pad;max+=pad;
+  const y=a=>top+(max-a)/(max-min)*(bottom-top);
+  for(const interval of DATA.intervals||[]){const a=Math.max(viewStart,interval.start),b=Math.min(viewEnd,interval.end);if(a>b)continue;ctx.fillStyle=interval.kind==='exclude'?'#ffe8e8':'#edfaef';ctx.fillRect(x(a),top,x(b)-x(a),bottom-top);}
+  ctx.font='12px system-ui';ctx.fillStyle=colors[i%colors.length];ctx.fillText(`${i+1}. ${track.label} · ${track.id}`,50,top-7);
+  for(let j=0;j<=2;j++){const yy=top+j*(bottom-top)/2;ctx.strokeStyle='#e0e7ef';ctx.beginPath();ctx.moveTo(50,yy);ctx.lineTo(w-15,yy);ctx.stroke();ctx.fillStyle='#52657b';ctx.fillText((max-j*(max-min)/2).toFixed(1),2,yy+4);}
+  for(const span of track.spans){line(span,1,'#b1becd',x,y);line(span,2,colors[i%colors.length],x,y);}
+  for(const tt of DATA.truth||[]){if(tt<viewStart||tt>viewEnd)continue;ctx.strokeStyle='#168345';ctx.beginPath();ctx.moveTo(x(tt),top);ctx.lineTo(x(tt),bottom);ctx.stroke();}
+  for(const p of trackPeaks[i]){if(p[0]<viewStart||p[0]>viewEnd)continue;ctx.fillStyle='#d62e45';ctx.beginPath();ctx.arc(x(p[0]),y(p[2]),3.5,0,Math.PI*2);ctx.fill();}
+  for(const entry of track.errors){if(entry.kind!=='false_negative'||entry.time<viewStart||entry.time>viewEnd)continue;const xx=x(entry.time),yy=bottom-8;ctx.strokeStyle='#8a2ca5';ctx.beginPath();ctx.moveTo(xx-4,yy-4);ctx.lineTo(xx+4,yy+4);ctx.moveTo(xx+4,yy-4);ctx.lineTo(xx-4,yy+4);ctx.stroke();}
+  if(mapping)for(const mark of marks){const tt=deviceTime(mark.video_time);if(tt<viewStart||tt>viewEnd)continue;ctx.strokeStyle='#d28c00';ctx.beginPath();ctx.moveTo(x(tt),top);ctx.lineTo(x(tt),bottom);ctx.stroke();}
+  ctx.strokeStyle='#192d44';ctx.beginPath();ctx.moveTo(x(t),top);ctx.lineTo(x(t),bottom);ctx.stroke();
+  const count=trackPeaks[i].filter(p=>p[0]>=viewStart&&p[0]<=viewEnd).length;
+  counts.push(`${i+1}: 窗口 ${count} / 片段 ${trackPeaks[i].length}`);
+ });
+ ctx.fillStyle='#52657b';for(let j=0;j<=4;j++){const tt=viewStart+j*width/4;ctx.fillText(tt.toFixed(2),Math.min(w-45,Math.max(40,x(tt)-15)),h-8);}
+ $('track-counts').textContent=counts.join(' · ');
+ $('clock').textContent=`视频 ${video.currentTime.toFixed(3)} s · 采集 ${mapping?t.toFixed(3):'未对齐'} s`;
+ $('scrub').value=video.currentTime;
+ $('counts').textContent='所有轨道共用采集时间 / s；纵轴：加速度 / m/s²。计数是检测点数量，评分仅覆盖人工有效区间。';
+ if(mapping&&(t<DATA.low||t>DATA.high))message('当前视频时刻不在所选数据片段范围内。');
+ else if(mapping&&!DATA.spans.some(span=>span[0][0]<=t&&t<=span[span.length-1][0]))message('当前时刻位于数据缺口，缺口内不插值。');
+ else if(mapping)message('已对齐 · 视频与全部算法轨道同步，可在差异列表中跳转。');
+}
 function draw(){
+ if(DATA.tracks){drawTracks();return;}
  const w=Math.max(300,canvas.clientWidth),h=300,dpr=window.devicePixelRatio||1;if(canvas.width!==Math.round(w*dpr)||canvas.height!==h*dpr){canvas.width=Math.round(w*dpr);canvas.height=h*dpr;}ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
  const t=mapping?deviceTime(video.currentTime):DATA.low,width=Number($('window').value);viewStart=t-width/2;viewEnd=t+width/2;
  const points=DATA.spans.flatMap(s=>s.filter(p=>p[0]>=viewStart&&p[0]<=viewEnd));let min=Infinity,max=-Infinity;
@@ -113,11 +164,12 @@ video.addEventListener('play',tick);for(const name of ['seeked','timeupdate','pa
 function renderMarks(){const body=$('marks');body.replaceChildren();marks.forEach((m,i)=>{const tr=document.createElement('tr');for(const value of [m.video_time.toFixed(3),mapping?deviceTime(m.video_time).toFixed(3):'未对齐',m.kind,m.note]){const td=document.createElement('td');td.textContent=value;tr.append(td);}const td=document.createElement('td'),jump=document.createElement('button'),del=document.createElement('button');jump.textContent='跳转';jump.onclick=()=>{video.pause();seek(m.video_time);};del.textContent='删除';del.onclick=()=>{marks.splice(i,1);renderMarks();draw();};td.append(jump,del);tr.append(td);body.append(tr);});}
 $('mark').onclick=()=>{if(!mapping||!videoMeta||!Number.isFinite(video.duration)){message('请先加载视频并应用对齐。');return;}const t=deviceTime(video.currentTime);if(t<DATA.low||t>DATA.high){message('当前时刻不在数据片段内，不能标记。');return;}marks.push({video_time:video.currentTime,kind:$('kind').value,note:$('note').value});marks.sort((a,b)=>a.video_time-b.video_time);renderMarks();draw();};
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type})),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
-function record(){return {schema_version:1,capture_key:DATA.capture_key,raw_sha256:DATA.raw_sha256,segment:DATA.segment,algorithm:DATA.algorithm,video:videoMeta,mapping,marks:marks.map(m=>({...m,time:deviceTime(m.video_time)})),saved_at:new Date().toISOString()};}
+function record(){return {schema_version:1,capture_key:DATA.capture_key,raw_sha256:DATA.raw_sha256,segment:DATA.segment,algorithm:DATA.algorithm,review_context:DATA.review_context,video:videoMeta,mapping,marks:marks.map(m=>({...m,time:deviceTime(m.video_time)})),saved_at:new Date().toISOString()};}
 $('save').onclick=()=>{if(!mapping){message('请先应用对齐。');return;}download('video-review.json',JSON.stringify(record(),null,2),'application/json');};
 $('csv').onclick=()=>{if(!mapping){message('请先应用对齐。');return;}const escape=v=>'"'+String(v).replaceAll('"','""')+'"';const lines=[['capture_key','segment','video_time','time','kind','note'],...marks.map(m=>[DATA.capture_key,DATA.segment,m.video_time,deviceTime(m.video_time),m.kind,m.note])];download('video-review.csv','\ufeff'+lines.map(row=>row.map(escape).join(',')).join('\r\n'),'text/csv;charset=utf-8');};
 $('restore').onchange=async()=>{try{const file=$('restore').files[0];if(!file)return;const r=JSON.parse(await file.text());
  if(r.schema_version!==1||r.capture_key!==DATA.capture_key||r.raw_sha256!==DATA.raw_sha256||r.segment!==DATA.segment)throw Error('记录与当前采集／片段不一致');
+ if(JSON.stringify(r.review_context)!==JSON.stringify(DATA.review_context))throw Error('对比实验或片段与记录不一致');
  if(JSON.stringify(r.algorithm)!==JSON.stringify(DATA.algorithm))throw Error('分析参数与保存记录不一致，请先调整上方参数');
  if(r.video&&videoMeta&&JSON.stringify(r.video)!==JSON.stringify(videoMeta))throw Error('当前视频与记录的视频信息不一致');
  if(!r.mapping||!Array.isArray(r.marks))throw Error('记录缺少同步点或标记');

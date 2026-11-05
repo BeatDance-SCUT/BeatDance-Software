@@ -31,12 +31,16 @@
 - `infra.evaluation`：有效区间计算、事件一对一匹配、失败案例与指标。
 - `infra.experiments`：无界面实验执行、任务锁、取消、来源记录、报告与结果包。
 - `infra.demo`：确定性合成六轴输入与人工构造标注。
-- `infra.workbench`：六个 Streamlit 页面；仅调用公共接口、持有会话内接收器与任务对象。
-- `infra.video_review`、`infra/video_review.html`：按启动片段生成离线分析，浏览器本地视频与波形联动复核。
+- `beatdance.counting`：五种离线预置、候选日志与参数校验。
+- `infra.counting_lab`、`infra.counting_ui`：批量实验、参数扫描、差异复核和报告；复用 ExperimentJob。
+- `infra.workbench`：七个 Streamlit 页面；仅调用公共接口、持有会话内接收器与任务对象。
+- `infra.video_review`、`infra/video_review.html`：单采集模式生成离线分析，多算法模式读取保存产物；共用本地视频对齐、游标与复核记录。
 
 页面和命令行复用同一个 `ExperimentJob`。接入离线零相位滤波算法与人工输入同步点的视频复核，未实现产品在线检测、声音反馈或训练。没有新增第三方依赖。
 
 ## 视频复核
+
+本页含“采集波峰复核”和“算法实验对比”两种模式。后者直接使用保存的实验结果，也可从算法实验台进入；多轨道、差异跳转与对齐身份见 [视频同步对比](COUNTING_LAB.md#视频同步对比)。以下步骤描述采集复核。
 
 1. 运行 `infra_app.py`，进入“视频复核”，选择已结束的采集和设备启动片段。波形复用当前公共离线算法；展开“波峰分析参数”可选择合加速度或单轴、峰显著度和最小峰间距。
 2. 在播放器内选择本地视频。文件仅通过浏览器的本地文件接口读取，不上传到 Python 服务，也不写入原始采集目录。推荐 H.264 MP4；其他格式能否播放取决于浏览器的解码支持。
@@ -65,9 +69,11 @@
 
 `analysis.csv` 和 `events.csv` 带有 `selection/capture_key/signal/segment/span`，避免跨批次、启动片段和缺口合并。`events.csv` 只包含候选波峰，不是已确认的产品动作。输入整个原始启动片段，按缺口分段分析，再裁剪为数据集选区；选区外的样本可能作为离线滤波上下文。`cases.csv` 包含 matched／false_positive／false_negative、人工与候选时间及带符号偏差。
 
+批次对象保存于 `results/counting_batches/<id>/`：batch.json 记录问题、用途、状态与子实验 ID，configs.json 保存配置列表。复盘保存于 `results/counting_reviews/<id>/`：review.json 记录所选实验与结论，report.html 为独立组会报告。各实验的 `inputs/<selection>/candidates.csv` 为候选接受／拒绝日志，`manifest.json` 的 timings 为离线耗时，不混入确定性评分。analysis.csv 可含动态阈值列；逐选区指标附带采集标签。
+
 ## 算法和评估
 
-`AlgorithmConfig` 的默认值与现有分析兼容：
+`AlgorithmConfig` 的默认值与现有分析兼容。实验配置另支持 `algorithm_id` 和 `detector_params`；旧配置不提供后者时使用默认值，具体参数见 [COUNTING_LAB.md](COUNTING_LAB.md)。以下是兼容的基线配置：
 
 ```json
 {
@@ -118,4 +124,10 @@
 .\.venv\Scripts\python -m unittest discover -s tests -v
 ```
 
-工作台默认使用仓库路径，与启动时当前目录无关。仅测试或独立工作区需要设置 `BEATDANCE_INFRA_ROOT` 来切换完整数据根目录。CSV／JSON 数据、标注、数据集和实验目录默认不进 Git，需要另外备份。
+工作台默认使用仓库路径，与启动时当前目录无关。仅测试或独立工作区需要设置 `BEATDANCE_INFRA_ROOT` 来切换完整数据根目录。采集、标注、数据集和实验数据需另外备份。当前根 .gitignore 未单独列出 counting_batches/counting_reviews，不能假设批次与复盘会被自动忽略，提交前应检查 Git 状态。
+
+## 离线计数算法实验台
+
+新增“算法实验台”页面，预置五种计数方案，支持批量运行、一维参数扫描、同数据配对差异、同步波形与独立 HTML 报告。操作、算法边界和扩展接口见 [COUNTING_LAB.md](COUNTING_LAB.md)。原默认算法及评分规则保留。
+
+算法实验台现已复用视频复核播放器：默认支持多算法与本地视频同步、差异跳转、对齐记录恢复及独立复核 HTML；视频复核页也提供“算法实验对比”入口。详见 COUNTING_LAB.md 的视频同步对比说明。

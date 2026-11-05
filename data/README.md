@@ -6,6 +6,7 @@
 | `recordings/日期/批次/imu_raw.csv` | 一次采集的原始六轴样本 | 忽略，需单独备份 |
 | `recordings/日期/批次/session.json` | 参与者、动作标签、备注、单位和质量统计 | 忽略，需单独备份 |
 | `recordings/日期/批次/analysis_*.csv` | 可重新生成的派生分析 | 忽略，按需备份 |
+| `annotations/`、`datasets/` | 人工标注版本与固定数据快照 | 忽略，需单独备份 |
 
 采集批次由程序自动创建，不把模拟示例、测试数据和真实采集混放。`recordings/.gitkeep` 仅保留空目录结构。
 
