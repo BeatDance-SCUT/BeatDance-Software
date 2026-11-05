@@ -78,36 +78,66 @@ def time_window(frame, key, preferred=None):
 
 
 def raw_plot(frame, segment, start, end, annotation=None):
-    part = frame[(frame.segment == segment) & frame.time.between(start, end)]
+    part = frame[frame["seg"] == segment].copy()
+
     if part.empty:
         st.info("窗口内没有样本。")
         return
-    # Decimate only the display. Stored data and experimental input stay complete.
-    cuts = np.flatnonzero(np.diff(part.time) > 0.2 + 1e-9) + 1
+
+    # 将设备时间戳转换为当前数据段内的相对时间（秒）
+    part["time"] = (part["t_us"] - part["t_us"].iloc[0]) / 1_000_000
+
+    part = part[part["time"].between(start, end)]
+
+    if part.empty:
+        st.info("窗口内没有样本。")
+        return
+
+    cuts = np.flatnonzero(np.diff(part["time"]) > 0.2 + 1e-9) + 1
+
     fig, axes = plt.subplots(2, 1, sharex=True, figsize=(11, 4))
-    for ax, columns, unit in ((axes[0], ("ax_g", "ay_g", "az_g"), "g"),
-                              (axes[1], ("gx_dps", "gy_dps", "gz_dps"), "deg/s")):
+
+    for ax, columns, unit in (
+        (axes[0], ("ax", "ay", "az"), "g"),
+        (axes[1], ("gx", "gy", "gz"), "deg/s"),
+    ):
         for index, block in enumerate(np.split(np.arange(len(part)), cuts)):
             display = part.iloc[block][::max(1, len(part) // 2000)]
+
             for column in columns:
-                ax.plot(display.time, display[column],
-                        label=column if index == 0 else None)
+                ax.plot(
+                    display["time"],
+                    display[column],
+                    label=column if index == 0 else None,
+                )
+
         ax.set_ylabel(unit)
         ax.legend(loc="upper right")
+
     if annotation:
         for event in annotation["events"]:
             if event["segment"] == segment and start <= event["time"] <= end:
                 axes[0].axvline(event["time"], color="green", alpha=0.6)
+
         for interval in annotation["intervals"]:
-            if interval["segment"] == segment and interval["end"] >= start and interval["start"] <= end:
-                axes[0].axvspan(max(start, interval["start"]), min(end, interval["end"]),
-                               color="green" if interval["kind"] == "valid" else "red", alpha=0.12)
+            if (
+                interval["segment"] == segment
+                and interval["end"] >= start
+                and interval["start"] <= end
+            ):
+                axes[0].axvspan(
+                    max(start, interval["start"]),
+                    min(end, interval["end"]),
+                    color="green" if interval["kind"] == "valid" else "red",
+                    alpha=0.12,
+                )
+
     axes[1].set_xlim(start, max(end, start + 0.01))
     axes[1].set_xlabel("Device-relative time (s)")
+
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
-
 
 def capture_page(store):
     receiver = st.session_state.get("infra_receiver")
@@ -142,8 +172,8 @@ def capture_page(store):
             st.json(state)
             if rows:
                 frame = rows_to_frame(rows)
-                segment = int(frame.segment.iloc[-1])
-                last = float(frame[frame.segment == segment].time.max())
+                segment = int(frame["seg"].iloc[-1])
+                last = float(frame[frame["seg"] == segment]["t_us"].max() / 1_000_000)
                 raw_plot(frame, segment, max(0, last - 10), last)
             if state["error"]:
                 st.error(state["error"])

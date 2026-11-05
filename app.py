@@ -5,7 +5,7 @@ import streamlit as st
 
 from beatdance.imu_udp import UDPReceiver
 from beatdance.paths import DEFAULT_RECORDINGS, EXAMPLE_ANALYSIS
-from beatdance.recordings import SIGNALS, rows_to_frame, save_analysis
+from beatdance.recordings import SIGNALS, load_raw_csv, rows_to_frame, save_analysis
 from beatdance.signal_processing import analyze_imu, peak_intervals
 
 
@@ -92,8 +92,16 @@ def render_imu(raw, window, signal):
     left.line_chart(latest.set_index("time")[["ax_g", "ay_g", "az_g"]])
     right.caption("角速度 / °/s")
     right.line_chart(latest.set_index("time")[["gx_dps", "gy_dps", "gz_dps"]])
-    st.caption(f"设备：{latest['device'].iloc[-1]} · 来源：{latest['sender_ip'].iloc[-1]} · "
-               f"温度：{latest['temp_c'].iloc[-1]:.2f} °C · 启动片段：{latest['segment'].iloc[-1]}")
+    # 扁平协议没有 device/temp_c 等字段，历史格式才有；缺列时跳过而不是报错。
+    facts = []
+    if "device" in latest.columns:
+        facts.append(f"设备：{latest['device'].iloc[-1]}")
+    if "sender_ip" in latest.columns:
+        facts.append(f"来源：{latest['sender_ip'].iloc[-1]}")
+    if "temp_c" in latest.columns:
+        facts.append(f"温度：{latest['temp_c'].iloc[-1]:.2f} °C")
+    facts.append(f"启动片段：{int(latest['segment'].iloc[-1])}")
+    st.caption(" · ".join(facts))
     st.subheader(f"加速度分析 · {signal} · 最近 {window} 秒")
     analysis = analyze_imu(latest, signal)
     render_analysis(analysis)
@@ -135,8 +143,11 @@ if mode == "分析 CSV":
 elif mode == "UDP 实时采集":
     st.info("开始后自动逐行保存原始 CSV，再读取 CSV 更新曲线。首次收到的设备与发送 IP 会锁定本次采集。")
     running = receiver is not None and receiver.snapshot(read_rows=False)[1]["running"]
-    bind = st.sidebar.text_input("本地监听地址", "0.0.0.0", disabled=running)
-    port = int(st.sidebar.number_input("UDP 端口", min_value=1, max_value=65535, value=5005, disabled=running))
+    # 采集期间控件被禁用，重新渲染会回落到默认值；记住上次实际使用的地址与端口。
+    saved_bind, saved_port = st.session_state.get("capture_endpoint", ("0.0.0.0", 5005))
+    bind = st.sidebar.text_input("本地监听地址", saved_bind, disabled=running)
+    port = int(st.sidebar.number_input("UDP 端口", min_value=1, max_value=65535,
+                                       value=int(saved_port), disabled=running))
     st.sidebar.caption(f"自动存储位置：{DEFAULT_RECORDINGS}")
     participant = st.sidebar.text_input("参与者编号（可选）", disabled=running)
     activity = st.sidebar.text_input("动作标签（可选，例如 jump_rope）", disabled=running)
@@ -156,8 +167,10 @@ elif mode == "UDP 实时采集":
         except (OSError, ValueError) as exc:
             if new_receiver is not None:
                 new_receiver.stop()
-            st.error(f"无法开始采集：{exc}。检查监听地址、目录权限及端口是否被其他程序占用。")
+            st.error(f"无法开始采集：{exc}。检查监听地址、目录权限及端口是否被其他程序占用。"
+                     "同一时间只能有一个入口监听该端口，请先关掉另一个正在运行的 app 或 infra_app。")
         else:
+            st.session_state.capture_endpoint = (bind, port)
             st.rerun()
     if stop_col.button("停止并保存", disabled=not running):
         finalize(receiver)
@@ -205,8 +218,8 @@ else:
     st.code(str(directory), language=None)
     st.json(selected.read_text(encoding="utf-8"), expanded=False)
     try:
-        raw = pd.read_csv(directory / "imu_raw.csv")
-    except (OSError, ValueError) as exc:
+        raw = load_raw_csv(directory / "imu_raw.csv")
+    except (OSError, ValueError, KeyError) as exc:
         st.error(f"无法读取原始 CSV：{exc}")
         st.stop()
     if not raw.empty:

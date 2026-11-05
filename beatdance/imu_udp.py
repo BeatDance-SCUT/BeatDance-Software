@@ -20,16 +20,15 @@ from uuid import uuid4
 from .paths import DEFAULT_RECORDINGS
 
 UINT32 = 2**32
+REBOOT_THRESHOLD = 2**31
 RAW_COLUMNS = [
-    "pc_time", "device", "sender_ip", "seq", "t_ms", "imu_id",
-    "ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps", "temp_c",
-    "v", "segment", "time", "seq_gap",
+    "host_s", "seg", "time", "seq", "t_us", "t_ms",
+    "ax", "ay", "az", "gx", "gy", "gz",
 ]
 
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
-
 
 def read_capture_rows(path, max_rows=30000):
     """Read complete rows from the CSV tail without scanning a long recording.
@@ -74,39 +73,48 @@ class IMUSample:
     gz: float
 
 
+FLAT_AXES = ("ax", "ay", "az", "gx", "gy", "gz")
+
+
 def parse_packet(packet):
-    """Validate one UDP v1 JSON datagram from the ESP32."""
+    """Validate one UDP v1 JSON datagram from the ESP32.
+
+    同时接受两代固件报文，避免重烧旧版固件后整包被判为无效：
+      扁平：{"v":1,"seq":n,"t_us":n,"ax":..,"ay":..,"az":..,"gx":..,"gy":..,"gz":..}
+      嵌套：{"v":1,"seq":n,"t_ms":n,"acc_g":[x,y,z],"gyro_dps":[x,y,z],...}
+    """
     try:
         obj = json.loads(packet.decode("utf-8"))
 
         if not isinstance(obj, dict) or type(obj.get("v")) is not int or obj["v"] != 1:
             raise ValueError("unsupported protocol version")
 
-        if type(obj.get("seq")) is not int or not 0 <= obj["seq"] < 2**16:
-            raise ValueError("seq must be uint16")
+        # seq 是固件的 uint32 递增计数；长时间运行会超过 65535，
+        # 因此不能再按 uint16 校验，否则设备跑满约 11 分钟后整包被丢弃。
+        if type(obj.get("seq")) is not int or not 0 <= obj["seq"] < UINT32:
+            raise ValueError("seq must be uint32")
 
-        if type(obj.get("t_us")) is not int or not 0 <= obj["t_us"] < 2**32:
-            raise ValueError("t_us must be uint32")
+        if "ax" in obj:
+            values = [obj.get(key) for key in FLAT_AXES]
+            t_us = obj.get("t_us")
+            if type(t_us) is not int or not 0 <= t_us < UINT32:
+                raise ValueError("t_us must be uint32")
+        else:
+            acc, gyro = obj.get("acc_g"), obj.get("gyro_dps")
+            if (not isinstance(acc, list) or not isinstance(gyro, list)
+                    or len(acc) != 3 or len(gyro) != 3):
+                raise ValueError("acc_g/gyro_dps must be 3-element arrays")
+            values = [*acc, *gyro]
+            t_ms = obj.get("t_ms")
+            if type(t_ms) is not int or not 0 <= t_ms < UINT32:
+                raise ValueError("t_ms must be uint32")
+            t_us = t_ms * 1000 % UINT32
 
-        keys = ("ax", "ay", "az", "gx", "gy", "gz")
-        values = []
-
-        for key in keys:
-            value = obj.get(key)
+        for value in values:
             if type(value) not in (int, float) or not math.isfinite(value):
-                raise ValueError(f"{key} must be a finite number")
-            values.append(float(value))
+                raise ValueError("axes must be finite numbers")
 
-        return IMUSample(
-            seq=obj["seq"],
-            t_us=obj["t_us"],
-            ax=values[0],
-            ay=values[1],
-            az=values[2],
-            gx=values[3],
-            gy=values[4],
-            gz=values[5],
-        )
+        return IMUSample(obj["seq"], t_us, *(float(value) for value in values))
 
     except (KeyError, TypeError, UnicodeDecodeError, OverflowError, RecursionError) as exc:
         raise ValueError("invalid IMU packet") from exc
@@ -157,7 +165,7 @@ class UDPReceiver:
                 "units": {"pc_time": "Unix seconds (PC wall clock)", "t_ms": "device uint32 milliseconds",
                           "time": "seconds since first accepted sample in each segment",
                           "acceleration": "g (includes gravity)", "angular_velocity": "deg/s", "temp_c": "deg C"},
-                "target_sample_rate_hz": 50,
+                "target_sample_rate_hz": 100,
                 "owner": None, "labels": {"participant": "", "activity": "", "notes": ""},
                 "sequence_policy": "First device+sender IP only; duplicates/reordering excluded. "
                                    "Backward counters after 2 s silence start a new segment.",
@@ -179,12 +187,22 @@ class UDPReceiver:
         return self
 
     def stop(self):
+        """Stop the worker and release the UDP port.
+
+        由工作线程自己关闭套接字：Windows 上从其他线程关闭一个正阻塞在
+        recvfrom 的套接字，端口可能仍被占用，导致重新开始采集报 WinError 10048。
+        工作线程每 0.2 s 检查一次停止标志，因此先等它自然退出。
+        """
         self._stop.set()
-        self._sock.close()
         if self._thread is not None:
-            self._thread.join(timeout=1)
-        elif self._csv_file is not None:
-            self._finish()
+            self._thread.join(timeout=2)
+            if self._thread.is_alive():
+                self._sock.close()
+                self._thread.join(timeout=1)
+        else:
+            self._sock.close()
+            if self._csv_file is not None:
+                self._finish()
 
     def set_labels(self, participant="", activity="", notes=""):
         with self._lock:
@@ -246,74 +264,66 @@ class UDPReceiver:
             self._finish()
 
     def _accept(self, sample, sender_ip, now, pc_time):
+        # 整个判定 + 落盘过程持锁，保证 snapshot() 读到的行与计数属于同一状态。
         with self._lock:
-            owner = sender_ip
-
-        if self._owner is not None and owner != self._owner:
-            self._counts["ignored_device"] += 1
-            return
-
-        gap = 0
-
-        if self._previous is not None:
-            previous = self._previous
-
-            # seq 是 uint16，范围 0 ~ 65535
-            delta_seq = (sample.seq - previous.seq) % (2**16)
-
-            # t_us 是 uint32，范围 0 ~ 2**32-1
-            delta_us = (sample.t_us - previous.t_us) % (2**32)
-
-            # 如果两个计数器都明显倒退，且中间至少间隔 2 秒，
-            # 暂时判断为设备重启。
-            reboot = (
-                delta_seq >= 2**15
-                and sample.seq < previous.seq
-                and sample.t_us < previous.t_us
-                and delta_us >= 2**31
-                and now - self._last_receive >= 2
-            )
-
-            if reboot:
-                self._segment += 1
-                self._elapsed_us = 0
-                self._counts["restarts"] += 1
-
-            elif (
-                delta_seq == 0
-                or delta_seq >= 2**15
-                or not 0 < delta_us < 2**31
-            ):
-                self._counts["out_of_order"] += 1
+            if self._owner is not None and sender_ip != self._owner:
+                self._counts["ignored_device"] += 1
                 return
 
-            else:
-                self._elapsed_us += delta_us
-                gap = delta_seq - 1
+            gap = 0
 
-        record = {
-            "host_s": pc_time,
-            "seg": self._segment,
-            "seq": sample.seq,
-            "t_us": sample.t_us,
-            "t_ms": sample.t_us // 1000,
-            "ax": sample.ax,
-            "ay": sample.ay,
-            "az": sample.az,
-            "gx": sample.gx,
-            "gy": sample.gy,
-            "gz": sample.gz,
-        }
+            if self._previous is not None:
+                previous = self._previous
 
-        self._writer.writerow(record)
-        self._csv_file.flush()
+                delta_seq = (sample.seq - previous.seq) % UINT32
+                delta_us = (sample.t_us - previous.t_us) % UINT32
 
-        self._owner = owner
-        self._previous = sample
-        self._last_receive = now
-        self._counts["packets"] += 1
-        self._counts["gaps"] += gap
-        self._arrivals.append(now)
+                # 两个计数器同时大幅倒退，且中间至少静默 2 秒，判为设备重启。
+                reboot = (
+                    sample.seq < previous.seq
+                    and sample.t_us < previous.t_us
+                    and delta_seq >= REBOOT_THRESHOLD
+                    and delta_us >= REBOOT_THRESHOLD
+                    and now - self._last_receive >= 2
+                )
+
+                if reboot:
+                    self._segment += 1
+                    self._elapsed_us = 0
+                    self._counts["restarts"] += 1
+
+                elif delta_seq == 0 or delta_seq >= REBOOT_THRESHOLD or not 0 < delta_us < REBOOT_THRESHOLD:
+                    self._counts["out_of_order"] += 1
+                    return
+
+                else:
+                    self._elapsed_us += delta_us
+                    gap = delta_seq - 1
+
+            record = {
+                "host_s": pc_time,
+                "seg": self._segment,
+                "time": self._elapsed_us / 1e6,
+                "seq": sample.seq,
+                "t_us": sample.t_us,
+                "t_ms": sample.t_us // 1000,
+                "ax": sample.ax,
+                "ay": sample.ay,
+                "az": sample.az,
+                "gx": sample.gx,
+                "gy": sample.gy,
+                "gz": sample.gz,
+            }
+
+            self._writer.writerow(record)
+            self._csv_file.flush()
+
+            self._owner = sender_ip
+            self._previous = sample
+            self._last_receive = now
+            self._counts["packets"] += 1
+            self._counts["gaps"] += gap
+            self._arrivals.append(now)
 
     def snapshot(self, read_rows=True):
         """Read persisted rows and counters; renew the browser's lease."""

@@ -18,6 +18,9 @@ class AlgorithmConfig:
     signal: str = "Magnitude"
     cutoff_hz: float = 5.0
     prominence: float = 0.7
+    # 实测标定（三组手腕单摇，`scripts.truth_tools calibrate`）：
+    # 0.40 s 时误差 +6.5%/-4.3%/+5.7%（MAE 5.5%，无系统偏差）；
+    # 放宽到 0.36 会把半周期假峰算进来（MAE 11%），到 0.42 又会吞掉真实峰。
     min_peak_interval: float = 0.4
     max_gap: float = 0.2
 

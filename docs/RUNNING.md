@@ -39,7 +39,27 @@ python -m venv .venv
 
 数据保存在 `data/recordings/UTC日期/唯一批次/`，每次开始使用新目录。原始六轴数据和派生分析分别保存。详见 [数据格式](DATA_FORMAT.md)。
 
-遇到“等待 UDP 数据”，检查硬件 `PC_IP`、端口、Wi-Fi 客户端隔离和 Windows 防火墙的 Python/UDP 入站权限。硬件仓库的 `imu_udp_plot.py` 与本软件不能同时占用同一 UDP 端口；端口被占用会显示错误。
+遇到“等待 UDP 数据”，检查硬件 `PC_IP`、端口、Wi-Fi 客户端隔离和 Windows 防火墙的 Python/UDP 入站权限。`app.py`、`infra_app.py` 的采集页和硬件仓库的 `imu_udp_plot.py` 三者不能同时占用同一 UDP 端口；端口被占用会显示错误。排查端口占用：
+
+```powershell
+netstat -ano | findstr :5005
+```
+
+## 不用硬件复现接收问题
+
+没有硬件时，可以把已保存的采集按原始时间节奏重新发成本机 UDP 报文，反复验证接收与显示：
+
+```powershell
+# 默认取最新一次采集，按 10 倍速发到 127.0.0.1:5005
+.\.venv\Scripts\python -m scripts.replay_capture --speed 10
+
+# 指定批次与端口；--loops 3 表示连续发三遍
+.\.venv\Scripts\python -m scripts.replay_capture --source data/recordings/2026-11-04/121723_291114_4da4bcc3 --port 5006 --loops 3
+```
+
+回放用的是与固件相同的 UDP v1 报文，因此界面里的“已写入 CSV”“检测波峰”“Δt–t”都应按原始采集的节奏变化。先启动“开始新采集”，再运行回放脚本。
+
+接收端同时兼容两代固件报文：扁平格式（`ax/ay/az/gx/gy/gz` + `t_us`）与旧版嵌套格式（`acc_g/gyro_dps` + `t_ms`）。`seq` 按 uint32 校验，设备连续运行超过约 11 分钟也不会因序号超出 uint16 而整包被丢弃。
 
 切换到其他数据模式会停止采集并生成分析。关闭/刷新浏览器造成会话失联后，接收器约 60 秒释放端口；之前写入的 CSV 保留。失联停止或进程异常退出后，可从历史页补生成分析。机器休眠、进程退出或浏览器长期暂停后台刷新都会影响持续采集。
 
@@ -58,6 +78,36 @@ python -m venv .venv
 ```
 
 `--no-show` 仅保存 CSV 和图片，适合自动验证。`--output-dir` 显式指定输出目录；重复使用同一指定目录会更新其中的同名结果。
+
+## 核对检出次数与人工计数
+
+单组即时核对，不给人工计数也能看结构：
+
+```powershell
+.\.venv\Scripts\python -m scripts.truth_tools quick --capture 2026-11-04/125933_337845_8e4eafd3 --blocks 10 --plot data/results/count_check/a.png
+```
+
+输出里三个数要分开看：**全段峰**含起止静置的假峰，**检出**已剔除静置（人的计数只数跳的），**相位法**是对带通信号积 Hilbert 相位的独立估计。`--blocks` 每段计数可与视频分段对齐；`--sweep` 扫阈值与最小间隔看灵敏度。
+
+注意相位法的定位：实测它相对人工计数系统性高估约 12%（手腕处一次跳跃会产生不止一个振荡周期），所以它只能用于发现「整段漏检」，不能当准确率基准，也不能拿两法接近就宣布算法准。
+
+多组批量比对，把人工计数填进 `data/count_truth.csv` 的 `actual` 列：
+
+```powershell
+.\.venv\Scripts\python -m scripts.truth_tools score --truth-file data/count_truth.csv
+```
+
+会给出每组「实际 / 检出 / 相位法 / 差 / 误差」、平均绝对误差与偏差方向。
+
+参数标定（有真值后再做，避免凭手感调参）：
+
+```powershell
+.\.venv\Scripts\python -m scripts.truth_tools calibrate --truth-file data/count_truth.csv
+```
+
+它会在突出度 × 最小峰间隔的网格上排名，同时打印当前默认参数的 MAE，差距小于 2 个百分点时建议不动默认值。2026-11-04 三组手腕单摇的结论：默认（0.7 m/s² / 0.40 s）MAE 5.5%、偏差 +1.7 次；改为 10.0 / 0.40 可到 3.9%，但那是三组拟合出来的，换人前不要当通用值。
+
+注意采样率：`quick` 直接读 `imu_raw.csv`，不经过 infra 的 50 Hz 契约，所以 100 Hz 的真实采集也能用。
 
 ## 回归验证
 
