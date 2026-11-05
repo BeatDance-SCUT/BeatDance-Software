@@ -5,8 +5,8 @@ import streamlit as st
 
 from beatdance.imu_udp import UDPReceiver
 from beatdance.paths import DEFAULT_RECORDINGS, EXAMPLE_ANALYSIS
-from beatdance.recordings import SIGNALS, rows_to_frame, save_analysis
-from beatdance.signal_processing import analyze_imu
+from beatdance.recordings import SIGNALS, load_raw_csv, rows_to_frame, save_analysis
+from beatdance.signal_processing import analyze_imu, peak_intervals
 
 
 st.set_page_config(page_title="Jump Rope Monitor", page_icon="🏃", layout="wide")
@@ -27,18 +27,15 @@ def render_analysis(df):
     except (TypeError, ValueError):
         st.error("分析 CSV 为空或含有无效数值。")
         return
-    groups = [key for key in ("segment", "span") if key in df.columns]
+    groups = [key for key in ("signal", "segment", "span") if key in df.columns]
     df = df.sort_values([*groups, "time"]).reset_index(drop=True)
     peaks = df[df["is_peak"] == 1]
-    intervals = []
+    intervals = peak_intervals(df)
     series = df.groupby(groups, sort=False) if groups else [(0, df)]
     duration = 0.0
     for _, frame in series:
         duration += float(frame["time"].max() - frame["time"].min())
-        intervals.extend(np.diff(frame.loc[frame["is_peak"] == 1, "time"]))
-    intervals = np.asarray(intervals)
-    intervals = intervals[intervals > 0]
-    average = float(intervals.mean()) if intervals.size else None
+    average = float(intervals["delta_t"].mean()) if not intervals.empty else None
     cards = st.columns(5)
     cards[0].metric("检测波峰", len(peaks))
     cards[1].metric("估计波峰频率 / 分钟", f"{60 / average:.1f}" if average else "N/A")
@@ -59,6 +56,28 @@ def render_analysis(df):
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
+    st.subheader("波峰间隔随时间变化 · Δt–t")
+    st.caption("横轴 t 为后一个波峰的设备相对时间；纵轴 Δt = tᵢ − tᵢ₋₁，单位均为秒。"
+               "每段首个波峰不产生间隔，不跨设备重启、数据缺口或不同信号计算和连线。")
+    if intervals.empty:
+        st.info("当前视图尚无有效间隔：同一连续片段内至少需要两个不同时间的波峰。")
+    else:
+        fig, ax = plt.subplots(figsize=(12, 3))
+        series = intervals.groupby(groups, sort=False) if groups else [(0, intervals)]
+        for index, (_, frame) in enumerate(series):
+            ax.plot(frame["time"], frame["delta_t"], color="darkorange", marker="o",
+                    markersize=4, label="Peak interval" if index == 0 else None)
+        ax.axhline(average, color="gray", linestyle="--", label=f"Mean: {average:.3f} s")
+        ax.set(xlabel="Device-relative time (s)", ylabel=r"$\Delta t$ (s)", ylim=(0, None))
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        st.pyplot(fig)
+        plt.close(fig)
+        with st.expander("间隔数据（当前视图）"):
+            st.dataframe(intervals, hide_index=True)
+            st.download_button("下载当前视图间隔 CSV", intervals.to_csv(index=False).encode("utf-8"),
+                               "peak_intervals.csv", "text/csv")
     with st.expander("波峰位置"):
         st.dataframe(peaks[[*groups, "time", "filtered_acceleration"]], hide_index=True)
     st.caption("波峰数量不是已验证的跳绳次数。实时窗口采用零相位离线滤波，窗口边缘的结果可能随新数据变化。")
@@ -73,8 +92,16 @@ def render_imu(raw, window, signal):
     left.line_chart(latest.set_index("time")[["ax_g", "ay_g", "az_g"]])
     right.caption("角速度 / °/s")
     right.line_chart(latest.set_index("time")[["gx_dps", "gy_dps", "gz_dps"]])
-    st.caption(f"设备：{latest['device'].iloc[-1]} · 来源：{latest['sender_ip'].iloc[-1]} · "
-               f"温度：{latest['temp_c'].iloc[-1]:.2f} °C · 启动片段：{latest['segment'].iloc[-1]}")
+    # 扁平协议没有 device/temp_c 等字段，历史格式才有；缺列时跳过而不是报错。
+    facts = []
+    if "device" in latest.columns:
+        facts.append(f"设备：{latest['device'].iloc[-1]}")
+    if "sender_ip" in latest.columns:
+        facts.append(f"来源：{latest['sender_ip'].iloc[-1]}")
+    if "temp_c" in latest.columns:
+        facts.append(f"温度：{latest['temp_c'].iloc[-1]:.2f} °C")
+    facts.append(f"启动片段：{int(latest['segment'].iloc[-1])}")
+    st.caption(" · ".join(facts))
     st.subheader(f"加速度分析 · {signal} · 最近 {window} 秒")
     analysis = analyze_imu(latest, signal)
     render_analysis(analysis)
@@ -116,8 +143,11 @@ if mode == "分析 CSV":
 elif mode == "UDP 实时采集":
     st.info("开始后自动逐行保存原始 CSV，再读取 CSV 更新曲线。首次收到的设备与发送 IP 会锁定本次采集。")
     running = receiver is not None and receiver.snapshot(read_rows=False)[1]["running"]
-    bind = st.sidebar.text_input("本地监听地址", "0.0.0.0", disabled=running)
-    port = int(st.sidebar.number_input("UDP 端口", min_value=1, max_value=65535, value=5005, disabled=running))
+    # 采集期间控件被禁用，重新渲染会回落到默认值；记住上次实际使用的地址与端口。
+    saved_bind, saved_port = st.session_state.get("capture_endpoint", ("0.0.0.0", 5005))
+    bind = st.sidebar.text_input("本地监听地址", saved_bind, disabled=running)
+    port = int(st.sidebar.number_input("UDP 端口", min_value=1, max_value=65535,
+                                       value=int(saved_port), disabled=running))
     st.sidebar.caption(f"自动存储位置：{DEFAULT_RECORDINGS}")
     participant = st.sidebar.text_input("参与者编号（可选）", disabled=running)
     activity = st.sidebar.text_input("动作标签（可选，例如 jump_rope）", disabled=running)
@@ -137,8 +167,10 @@ elif mode == "UDP 实时采集":
         except (OSError, ValueError) as exc:
             if new_receiver is not None:
                 new_receiver.stop()
-            st.error(f"无法开始采集：{exc}。检查监听地址、目录权限及端口是否被其他程序占用。")
+            st.error(f"无法开始采集：{exc}。检查监听地址、目录权限及端口是否被其他程序占用。"
+                     "同一时间只能有一个入口监听该端口，请先关掉另一个正在运行的 app 或 infra_app。")
         else:
+            st.session_state.capture_endpoint = (bind, port)
             st.rerun()
     if stop_col.button("停止并保存", disabled=not running):
         finalize(receiver)
@@ -186,8 +218,8 @@ else:
     st.code(str(directory), language=None)
     st.json(selected.read_text(encoding="utf-8"), expanded=False)
     try:
-        raw = pd.read_csv(directory / "imu_raw.csv")
-    except (OSError, ValueError) as exc:
+        raw = load_raw_csv(directory / "imu_raw.csv")
+    except (OSError, ValueError, KeyError) as exc:
         st.error(f"无法读取原始 CSV：{exc}")
         st.stop()
     if not raw.empty:

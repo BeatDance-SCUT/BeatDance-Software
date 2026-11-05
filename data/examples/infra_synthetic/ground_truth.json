@@ -1,0 +1,144 @@
+{
+  "synthetic": true,
+  "events": [
+    {
+      "segment": 0,
+      "time": 0.125
+    },
+    {
+      "segment": 0,
+      "time": 0.625
+    },
+    {
+      "segment": 0,
+      "time": 1.125
+    },
+    {
+      "segment": 0,
+      "time": 1.625
+    },
+    {
+      "segment": 0,
+      "time": 2.125
+    },
+    {
+      "segment": 0,
+      "time": 2.625
+    },
+    {
+      "segment": 0,
+      "time": 3.625
+    },
+    {
+      "segment": 0,
+      "time": 4.125
+    },
+    {
+      "segment": 0,
+      "time": 4.625
+    },
+    {
+      "segment": 0,
+      "time": 5.125
+    },
+    {
+      "segment": 0,
+      "time": 5.625
+    },
+    {
+      "segment": 0,
+      "time": 6.125
+    },
+    {
+      "segment": 0,
+      "time": 6.625
+    },
+    {
+      "segment": 0,
+      "time": 7.125
+    },
+    {
+      "segment": 0,
+      "time": 7.625
+    },
+    {
+      "segment": 1,
+      "time": 0.125
+    },
+    {
+      "segment": 1,
+      "time": 0.625
+    },
+    {
+      "segment": 1,
+      "time": 1.125
+    },
+    {
+      "segment": 1,
+      "time": 1.625
+    },
+    {
+      "segment": 1,
+      "time": 2.125
+    },
+    {
+      "segment": 1,
+      "time": 2.625
+    },
+    {
+      "segment": 1,
+      "time": 3.125
+    },
+    {
+      "segment": 1,
+      "time": 3.625
+    },
+    {
+      "segment": 1,
+      "time": 4.125
+    },
+    {
+      "segment": 1,
+      "time": 4.625
+    },
+    {
+      "segment": 1,
+      "time": 5.125
+    },
+    {
+      "segment": 1,
+      "time": 5.625
+    },
+    {
+      "segment": 1,
+      "time": 6.125
+    },
+    {
+      "segment": 1,
+      "time": 6.625
+    },
+    {
+      "segment": 1,
+      "time": 7.125
+    },
+    {
+      "segment": 1,
+      "time": 7.625
+    }
+  ],
+  "intervals": [
+    {
+      "segment": 0,
+      "start": 0.0,
+      "end": 7.98,
+      "kind": "valid"
+    },
+    {
+      "segment": 1,
+      "start": 0.0,
+      "end": 7.98,
+      "kind": "valid"
+    }
+  ],
+  "notes": "人工构造时刻，仅用于软件流程验收。"
+}

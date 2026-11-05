@@ -1,5 +1,22 @@
 # 仓库文件导航
 
+## Infra v1 新增位置
+
+| 位置 | 职责 |
+| --- | --- |
+| `infra_app.py` | 独立 Streamlit 开发工作台入口，保留原 `app.py` |
+| `infra/store.py` | 原始采集校验、导入、标注版本与数据集快照 |
+| `infra/evaluation.py` | 按有效区域的一对一匹配与指标 |
+| `infra/experiments.py` | UI／CLI 共用的后台实验、互斥、取消、报告与导出 |
+| `infra/workbench.py` | 采集、数据、标注、实验、对比五个页面 |
+| `infra/demo.py`、`data/examples/infra_synthetic/` | 明确标识的合成六轴和构造真值 |
+| `data/annotations/`、`data/datasets/` | 本地不可变版本与快照，默认不入 Git |
+| `results/experiments/` | 独立实验目录及进程级工作锁，默认不入 Git |
+| `tests/test_infra.py` | 数据契约、评估、实验、命令行及页面回归 |
+| `docs/INFRA.md` | 工作台操作和文件契约 |
+
+`beatdance/signal_processing.py` 新增可选 `AlgorithmConfig`，默认保持既有算法结果；其余原入口和历史材料保留。以下文件树展示原有应用的基础结构。
+
 ## 目录职责
 
 ```text
