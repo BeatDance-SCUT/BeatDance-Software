@@ -174,24 +174,19 @@ class CaptureTests(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
             reserve.bind(("127.0.0.1", 0))
             port = reserve.getsockname()[1]
-        with patch("beatdance.paths.DEFAULT_RECORDINGS", self.output):
-            app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
-            app.sidebar.radio[0].set_value("UDP 实时采集").run()
-            app.sidebar.number_input[0].set_value(port)
-            app.sidebar.button[0].click().run()
-            receiver = app.session_state["udp_receiver"]
+        with patch.dict("os.environ", {"BEATDANCE_INFRA_ROOT": str(self.output)}):
+            app = AppTest.from_file(str(ROOT / "infra_app.py"), default_timeout=30).run()
+            app.number_input[0].set_value(port)
+            next(b for b in app.button if b.label == "开始采集").click().run()
+            receiver = app.session_state["infra_receiver"]
             self.addCleanup(receiver.stop)
             sent, _ = replay(source, "127.0.0.1", port, speed=50, verbose=False)
             wait_for(receiver, "packets", sent)
             app.run()
             self.assertEqual(len(app.exception), 0)
-            self.assertEqual(app.metric[0].value, str(sent))
-            peaks = int(app.metric[4].value)
-            self.assertGreater(peaks, 0)
-            # 六轴曲线 + 波峰图均为 matplotlib 图，Δt–t 图同样渲染。
-            self.assertGreaterEqual(len(app.get("image")), 2)
-            self.assertIn("波峰间隔随时间变化 · Δt–t", [item.value for item in app.subheader])
-            app.sidebar.button[1].click().run()
+            self.assertEqual(len(read_capture_rows(receiver.csv_path)), sent)
+            self.assertGreaterEqual(len(app.get("image")), 1)
+            next(b for b in app.button if b.label == "停止并保存").click().run()
             self.assertEqual(len(app.exception), 0)
             self.assertTrue((receiver.directory / "analysis_magnitude.csv").exists())
 
@@ -225,14 +220,13 @@ class CaptureTests(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
             reserve.bind(("127.0.0.1", 0))
             port = reserve.getsockname()[1]
-        with patch("beatdance.paths.DEFAULT_RECORDINGS", self.output):
-            app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=25).run()
+        with patch.dict("os.environ", {"BEATDANCE_INFRA_ROOT": str(self.output)}):
+            app = AppTest.from_file(str(ROOT / "infra_app.py"), default_timeout=25).run()
             self.assertEqual(len(app.exception), 0)
-            app.sidebar.radio[0].set_value("UDP 实时采集").run()
-            app.sidebar.number_input[0].set_value(port)
-            app.sidebar.text_input[1].set_value("P001")
-            app.sidebar.button[0].click().run()
-            receiver = app.session_state["udp_receiver"]
+            app.number_input[0].set_value(port)
+            app.text_input[1].set_value("P001")
+            next(b for b in app.button if b.label == "开始采集").click().run()
+            receiver = app.session_state["infra_receiver"]
             self.addCleanup(receiver.stop)
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
                 for seq in range(80):
@@ -241,22 +235,22 @@ class CaptureTests(unittest.TestCase):
             wait_for(receiver, "packets", 80)
             app.run()
             self.assertEqual(len(app.exception), 0)
-            self.assertEqual(app.metric[0].value, "80")
+            self.assertEqual(len(read_capture_rows(receiver.csv_path)), 80)
             saved_time = float(read_capture_rows(receiver.csv_path)[-1]["time"])
             self.assertTrue(any(f"采集时间 {saved_time:.3f} s" in m.value for m in app.markdown))
-            app.sidebar.button[1].click().run()
+            next(b for b in app.button if b.label == "停止并保存").click().run()
             self.assertEqual(len(app.exception), 0)
             original = receiver.csv_path.read_bytes()
             self.assertTrue((receiver.directory / "analysis_magnitude.csv").exists())
-            app.sidebar.button[0].click().run()
-            second = app.session_state["udp_receiver"]
+            next(b for b in app.button if b.label == "开始采集").click().run()
+            second = app.session_state["infra_receiver"]
             self.addCleanup(second.stop)
             self.assertNotEqual(second.directory, receiver.directory)
-            app.sidebar.radio[0].set_value("历史采集").run()
+            app.sidebar.radio[0].set_value("数据").run()
             self.assertEqual(len(app.exception), 0)
             self.assertFalse(second.snapshot()[1]["running"])
             self.assertEqual(receiver.csv_path.read_bytes(), original)
-            self.assertEqual(len(list(self.output.glob("*/*/imu_raw.csv"))), 2)
+            self.assertEqual(len(list((self.output / "data" / "recordings").glob("*/*/imu_raw.csv"))), 2)
 
 
 class SignalTests(unittest.TestCase):

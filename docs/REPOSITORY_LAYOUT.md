@@ -4,8 +4,8 @@
 
 | 位置 | 职责 |
 | --- | --- |
-| `infra_app.py` | 独立 Streamlit 开发工作台入口，保留原 `app.py` |
-| `beatdance/capture_clock.py` | 两个采集入口共用的视频对时时间显示 |
+| `infra_app.py` | 唯一正式 Streamlit 入口，包含采集与离线实验 |
+| `beatdance/capture_clock.py` | 采集页的视频对时时间显示 |
 | `infra/store.py` | 原始采集校验、导入、标注版本与数据集快照 |
 | `beatdance/counting.py` | 五种离线检测预置、候选决策日志与参数校验 |
 | `infra/counting_lab.py` | 批量编排、配对差异、同步绘图与组会报告 |
@@ -24,13 +24,13 @@
 | `tests/test_infra.py` | 数据契约、评估、实验、命令行及页面回归 |
 | `docs/INFRA.md` | 工作台操作和文件契约 |
 
-`beatdance/signal_processing.py` 新增可选 `AlgorithmConfig`，默认保持既有算法结果；其余原入口和历史材料保留。以上表为当前新增模块导航；以下文件树仅展示原有应用基础结构，不是完整清单。
+`beatdance/signal_processing.py` 新增可选 `AlgorithmConfig`，默认保持既有算法结果；旧 `app.py` 入口已移除，历史材料保留。以上表为模块导航；以下文件树展示主要基础结构，不是完整清单。
 
 ## 目录职责
 
 ```text
 BeatDance-Software/
-├── app.py                         # Streamlit 启动入口与页面
+├── infra_app.py                   # 唯一正式 Streamlit 入口
 ├── README.md                      # 项目首页
 ├── requirements.txt               # Python 依赖
 ├── .gitignore                     # 本地数据与生成文件规则
@@ -83,6 +83,6 @@ BeatDance-Software/
 | `个人工作（数据，代码ect）/` 中的第二阶段报告和 P2 截图 | `docs/reports/phase_2/`，文件名不变 |
 | 新采集默认路径 `recordings/` | `data/recordings/` |
 
-整理时没有发现已有的根目录 `recordings/` 采集数据，因此无需迁移旧采集。若之后从其他副本导入旧采集，把原有“日期/批次”层级放入 `data/recordings/` 即可由历史页面识别。
+整理时没有发现已有的根目录 `recordings/` 采集数据，因此无需迁移旧采集。若之后从其他副本导入旧采集，把原有“日期/批次”层级放入 `data/recordings/` 即可由工作台“数据”页识别。
 
 业务模块导入统一使用 `beatdance.*`；路径统一由 `beatdance/paths.py` 提供，不依赖启动时的工作目录。原有报告、截图、模拟 CSV 和基准文件仅迁移位置；脚本输出调整为独立结果批次，避免污染根目录或覆盖基准。

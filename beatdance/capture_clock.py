@@ -1,4 +1,4 @@
-"""Shared filming reference for the two live capture pages."""
+"""Filming reference for the official capture page."""
 
 import streamlit as st
 
