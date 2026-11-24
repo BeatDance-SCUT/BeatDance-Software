@@ -7,7 +7,8 @@
 | `infra_app.py` | 唯一正式 Streamlit 入口，包含采集与离线实验 |
 | `beatdance/capture_clock.py` | 采集页的视频对时时间显示 |
 | `infra/store.py` | 原始采集校验、导入、标注版本与数据集快照 |
-| `beatdance/counting.py` | 五种离线检测预置、候选决策日志与参数校验 |
+| `beatdance/counting.py` | Loss Longer 计数工厂和回放 |
+| `beatdance/loss_longer.py`、`beatdance/landing.py`、`beatdance/waveform.py` | 计数决策、落地候选及周期跟踪 |
 | `infra/counting_lab.py` | 批量编排、配对差异、同步绘图与组会报告 |
 | `infra/counting_ui.py` | 算法实验台与视频对比入口 |
 | `infra/evaluation.py` | 按有效区域的一对一匹配与指标 |
@@ -19,12 +20,12 @@
 | `data/annotations/`、`data/datasets/` | 本地不可变版本与快照，默认不入 Git |
 | `results/experiments/` | 独立实验目录及进程级工作锁，默认不入 Git |
 | `results/counting_batches/`、`results/counting_reviews/` | 批次状态／配置与复盘报告；当前根 .gitignore 未单独列出，分享前检查 Git 状态 |
-| `tests/test_counting_lab.py` | 预置算法、批次隔离、对比和界面回归 |
+| `tests/test_counting_lab.py` | 流式计数、批次隔离、对比和界面回归 |
 | `docs/COUNTING_LAB.md` | 算法参数、离线实验和视频同步对比使用说明 |
 | `tests/test_infra.py` | 数据契约、评估、实验、命令行及页面回归 |
 | `docs/INFRA.md` | 工作台操作和文件契约 |
 
-`beatdance/signal_processing.py` 新增可选 `AlgorithmConfig`，默认保持既有算法结果；旧 `app.py` 入口已移除，历史材料保留。以上表为模块导航；以下文件树展示主要基础结构，不是完整清单。
+`beatdance/signal_processing.py` 管理单轴显示和已保存事件的间隔计算。以上表为模块导航；以下文件树展示主要基础结构，不是完整清单。
 
 ## 目录职责
 
@@ -39,11 +40,11 @@ BeatDance-Software/
 │   ├── paths.py                    # 统一的仓库数据与结果路径
 │   ├── imu_udp.py                  # UDP 校验、接收和原始 CSV 保存
 │   ├── recordings.py               # CSV 读取和完整派生分析
-│   └── signal_processing.py        # 滤波与波峰分析
+│   └── signal_processing.py        # 单轴显示与事件间隔
 ├── scripts/                       # 用 python -m scripts.<名称> 运行
 │   ├── __init__.py
-│   ├── simulate_imu.py             # 模拟信号与示例分析生成
-│   └── benchmark_algorithm.py      # 不同噪声下的算法基准
+│   ├── replay_capture.py          # 本机 UDP 回放
+│   └── truth_tools.py              # 质量检查和真值工具
 ├── tests/
 │   └── test_udp_integration.py     # UDP、CSV、算法和界面回归
 ├── data/
@@ -74,8 +75,8 @@ BeatDance-Software/
 | `imu_udp.py` | `beatdance/imu_udp.py` |
 | `recordings.py` | `beatdance/recordings.py` |
 | `signal_processing.py` | `beatdance/signal_processing.py` |
-| `peak_detection.py` | `scripts/simulate_imu.py` |
-| `test_algorithm.py` | `scripts/benchmark_algorithm.py` |
+| `peak_detection.py` | 已退役，见 Git 历史 |
+| `test_algorithm.py` | 已退役，见 Git 历史 |
 | `analysis_result.csv` | `data/examples/analysis_result.csv` |
 | `test_results.csv` | `results/algorithm_baseline/test_results.csv` |
 | `noise_test_results.png` | `results/algorithm_baseline/noise_test_results.png` |

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from beatdance.paths import PROJECT_ROOT
-from beatdance.signal_processing import AlgorithmConfig, analyze_acceleration, analyze_imu
+from beatdance.counting import detect
 from infra.demo import install_demo, synthetic_fixture
 from infra.evaluation import evaluate_events
 from infra.experiments import BusyError, ExperimentConfig, ExperimentJob, export_run
@@ -43,16 +43,11 @@ class ContractTests(InfraCase):
         self.assertEqual(truth["intervals"], intervals)
         self.assertEqual(len(validate_capture(raw, meta)), 775)
 
-    def test_config_defaults_are_identical_and_invalid_values_rejected(self):
-        times = np.arange(0, 10, 0.02)
-        values = 9.81 + 1.2 * np.sin(4 * np.pi * times)
-        pd.testing.assert_frame_equal(analyze_acceleration(times, values),
-                                      analyze_acceleration(times, values, config=AlgorithmConfig()))
-        self.assertTrue(analyze_imu(pd.DataFrame(), config=AlgorithmConfig()).empty)
-        for kwargs in ({"signal": "bad"}, {"max_gap": float("nan")}, {"prominence": True},
-                       {"cutoff_hz": -1}, {"min_peak_interval": 0}):
-            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
-                AlgorithmConfig(**kwargs)
+    def test_config_defaults_and_retired_detector(self):
+        self.assertEqual(ExperimentConfig.from_dict({}), ExperimentConfig())
+        self.assertTrue(detect(pd.DataFrame()).analysis.empty)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            ExperimentConfig.from_dict({"algorithm_id": "offline-butterworth-peaks-v1"})
 
     def test_import_validates_and_preserves_raw_bytes(self):
         raw, meta, _, _ = synthetic_fixture()
@@ -204,15 +199,15 @@ class ExperimentTests(InfraCase):
     def test_partial_cancel_and_worker_exclusion(self):
         _, _, dataset = self.demo()
         job = ExperimentJob(self.store, dataset["id"])
-        original = analyze_imu
+        original = detect
         def cancel_after_one(*args, **kwargs):
             job.cancel()
             return original(*args, **kwargs)
-        with patch("infra.experiments.analyze_imu", side_effect=cancel_after_one):
+        with patch("infra.experiments.detect", side_effect=cancel_after_one):
             result = job.run()
         self.assertEqual(result["status"], "cancelled")
         self.assertEqual(result["completed"], 1)
-        self.assertFalse(pd.read_csv(job.directory / "events.csv").empty)
+        self.assertFalse(pd.read_csv(job.directory / "analysis.csv").empty)
         held = ExperimentJob(self.store, dataset["id"])
         held._prepare()
         try:
@@ -285,7 +280,7 @@ class WorkbenchTests(InfraCase):
         self.assertEqual(len(self.store.list_objects("run")), 1)
         self.assertFalse(app.exception)
         self.assertFalse(app.error)
-        second = ExperimentJob(self.store, dataset["id"], ExperimentConfig(AlgorithmConfig(prominence=10))).run()
+        second = ExperimentJob(self.store, dataset["id"], ExperimentConfig(detector_params={"weak_score": .6})).run()
         app.sidebar.radio[0].set_value("对比").run()
         app.multiselect[0].set_value([job.snapshot()["id"], second["id"]]).run()
         self.assertFalse(app.exception)
@@ -323,13 +318,13 @@ class WorkbenchTests(InfraCase):
         first = app.session_state["infra_job"]
         first.thread.join(timeout=20)
         app.run()
-        next(n for n in app.number_input if n.label == "峰显著度 / m/s²").set_value(10.0)
+        next(n for n in app.text_area if n.label == "Loss Longer 参数 JSON").set_value('{"weak_score": 0.6}')
         next(b for b in app.button if b.label == "运行实验").click().run()
         second = app.session_state["infra_job"]
         second.thread.join(timeout=20)
         app.run()
         self.assertEqual(second.snapshot()["status"], "completed")
-        self.assertEqual(read_json(second.directory / "config.json")["algorithm"]["prominence"], 10)
+        self.assertEqual(read_json(second.directory / "config.json")["detector_params"]["weak_score"], .6)
         self.assertEqual(len(self.store.list_objects("run")), 2)
         app.sidebar.radio[0].set_value("对比").run()
         app.multiselect[0].set_value([first.snapshot()["id"], second.snapshot()["id"]]).run()

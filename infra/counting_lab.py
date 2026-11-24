@@ -10,7 +10,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from .experiments import ExperimentConfig, ExperimentJob
 from .store import read_json, write_json, new_id, utc_now, Store
-from beatdance.counting import PRESETS, BASELINE
 
 
 def paired_cases(left, right):
@@ -74,10 +73,9 @@ def overlay(runs, selection, start, end):
         a = a[(a.selection == selection) & a.time.between(start, end)]
         for _, group in a.groupby("span"):
             ax.plot(group.time, group.filtered_acceleration, color="royalblue")
-            if run["config"]["algorithm_id"] == "hysteresis-v1":
-                for name in ("high_threshold", "low_threshold"):
-                    if name in group:
-                        ax.plot(group.time, group[name], linestyle="--", alpha=0.6)
+            for name in ("high_threshold", "low_threshold"):
+                if name in group:
+                    ax.plot(group.time, group[name], linestyle="--", alpha=0.6)
         peaks = a[a.is_peak == 1]
         ax.scatter(peaks.time, peaks.filtered_acceleration, color="red", s=18)
         ax.set_ylabel(run["config"]["algorithm_id"].replace("-v1", ""), fontsize=7)
@@ -173,12 +171,12 @@ class BatchJob:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Offline counting preset comparison")
+    parser = argparse.ArgumentParser(description="Batch replay with the Loss Longer counting algorithm")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--question", default="")
     args = parser.parse_args()
-    job = BatchJob(Store(args.root), args.dataset, [ExperimentConfig(algorithm_id=a) for a in PRESETS], args.question).start()
+    job = BatchJob(Store(args.root), args.dataset, [ExperimentConfig()], args.question).start()
     job.thread.join()
     print(json.dumps(job.snapshot(), ensure_ascii=False, indent=2))
     if job.snapshot()["status"] != "completed":

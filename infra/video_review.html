@@ -32,7 +32,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td,th{text-align:left;p
 <p class="muted">视频时刻从视频开头算起。屏幕时间存在刷新和网络延迟，本页按输入值对齐；请再用明显动作检查并微调。设备重启的片段分别对齐。</p></section>
 <section><div class="panels"><div><video id="video" controls preload="metadata" playsinline></video><p id="videoInfo" class="muted">尚未选择视频</p></div>
 <div><div id="clock">视频 — · 采集 —</div><canvas id="wave" aria-label="同步波形，点击跳转视频"></canvas>
-<p class="muted">浅灰：原始合加速度／所选轴；蓝：滤波信号；红点：算法候选波峰；橙线：复核标记；游标跟随视频。数据缺口不连线。</p></div></div>
+<p class="muted">浅灰：原始合加速度／所选轴；蓝：滤波信号；红点：算法计数事件；橙线：复核标记；游标跟随视频。数据缺口不连线。</p></div></div>
 <input id="scrub" aria-label="视频进度" type="range" min="0" max="1" step="0.001" value="0" disabled>
 <div class="row"><button id="play">播放／暂停</button><button id="back">后退一步</button><button id="forward">前进一步</button>
 <label>步长 / 秒 <input id="step" type="number" min="0.001" step="0.001" value="0.033333"></label>
@@ -153,7 +153,7 @@ function draw(){
  $('clock').textContent=`视频 ${video.currentTime.toFixed(3)} s · 采集 ${mapping?t.toFixed(3):'未对齐'} s`;
  $('scrub').value=video.currentTime;
  const count=peaks.filter(p=>p[0]>=viewStart&&p[0]<=viewEnd).length;
- $('counts').textContent=`窗口内候选波峰：${count} · 片段内候选波峰总数：${peaks.length} · 横轴：采集时间 / s；纵轴：加速度 / m/s²`;
+ $('counts').textContent=`窗口内计数事件：${count} · 片段内计数事件总数：${peaks.length} · 横轴：采集时间 / s；纵轴：加速度 / m/s²`;
  if(mapping&&(t<DATA.low||t>DATA.high))message('当前视频时刻不在所选数据片段范围内。');
  else if(mapping&&!DATA.spans.some(s=>s[0][0]<=t&&t<=s[s.length-1][0]))message('当前时刻位于数据缺口，缺口内不插值。');
  else if(mapping)message('已对齐 · 可点击波形跳转，或慢放观察动作。');

@@ -12,13 +12,11 @@ from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
-from scipy.signal import butter, find_peaks, sosfiltfilt
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from beatdance.imu_udp import RAW_COLUMNS, UINT32, UDPReceiver, parse_packet, read_capture_rows
 from beatdance.recordings import normalize_frame, rows_to_frame, save_analysis
-from beatdance.signal_processing import STANDARD_GRAVITY, analyze_acceleration, analyze_imu
 
 
 def packet(seq=0, t_us=20000, **changes):
@@ -70,7 +68,9 @@ class CaptureTests(unittest.TestCase):
         receiver.set_labels("P001", "jump_rope", "test fixture, not a human recording")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
             for seq in range(250):
-                sender.sendto(packet(seq, 20000 + seq * 20000), receiver.address)
+                phase = 2 * math.pi * seq / 25
+                sender.sendto(packet(seq, 20000 + seq * 20000,
+                                     az=1 + .9 * math.sin(phase), gx=150 * math.sin(phase)), receiver.address)
                 time.sleep(0.001)
             sender.sendto(b"not json", receiver.address)
             sender.sendto(packet(249, 20000 + 249 * 20000), receiver.address)  # duplicate
@@ -90,6 +90,8 @@ class CaptureTests(unittest.TestCase):
         before = receiver.csv_path.read_bytes()
         derived = pd.read_csv(save_analysis(receiver.directory))
         self.assertGreater(derived["is_peak"].sum(), 5)
+        self.assertIsNone(state["counting_error"])
+        self.assertEqual(state["jump_count"], derived["is_peak"].sum())
         self.assertEqual(receiver.csv_path.read_bytes(), before)
         metadata = json.loads((receiver.directory / "session.json").read_text(encoding="utf-8"))
         self.assertEqual(metadata["status"], "stopped")
@@ -251,36 +253,6 @@ class CaptureTests(unittest.TestCase):
             self.assertFalse(second.snapshot()[1]["running"])
             self.assertEqual(receiver.csv_path.read_bytes(), original)
             self.assertEqual(len(list((self.output / "data" / "recordings").glob("*/*/imu_raw.csv"))), 2)
-
-
-class SignalTests(unittest.TestCase):
-    def test_original_simulated_algorithm_is_preserved(self):
-        t = np.arange(0, 10, 1 / 50)
-        raw = 9.81 + 1.2 * np.sin(2 * np.pi * 1.8 * t) + 0.8 * np.random.default_rng(42).standard_normal(len(t))
-        expected = sosfiltfilt(butter(4, 5, fs=50, output="sos"), raw)
-        peaks, _ = find_peaks(expected, distance=20, prominence=0.7)
-        actual = analyze_acceleration(t, raw)
-        np.testing.assert_allclose(actual["filtered_acceleration"], expected, atol=1e-10)
-        np.testing.assert_array_equal(np.flatnonzero(actual["is_peak"]), peaks)
-
-    def test_gap_is_not_interpolated_and_short_spans_have_no_peaks(self):
-        t = np.r_[np.arange(0, 0.5, 0.02), np.arange(2, 2.5, 0.02)]
-        result = analyze_acceleration(t, np.sin(t))
-        self.assertEqual(result["span"].nunique(), 2)
-        self.assertFalse(result["time"].between(0.6, 1.9).any())
-        self.assertEqual(result["is_peak"].sum(), 0)
-
-    def test_g_conversion_and_latest_segment_only(self):
-        frame = pd.DataFrame(dict(segment=[0, 1, 1], time=[0, 0, 0.02],
-                                  ax_g=[4, 0, 0], ay_g=[0, 0, 0], az_g=[0, 1, 1]))
-        result = analyze_imu(frame)
-        np.testing.assert_allclose(result["raw_acceleration"], STANDARD_GRAVITY)
-        self.assertEqual(len(result), 2)
-
-    def test_invalid_times_are_rejected(self):
-        for times in ([0, 0], [1, 0], [0, float("nan")]):
-            with self.subTest(times=times), self.assertRaises(ValueError):
-                analyze_acceleration(times, [1, 1])
 
 
 if __name__ == "__main__":

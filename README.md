@@ -4,7 +4,7 @@
 
 ## 正式采集与算法工作台
 
-“视频复核”页支持选择本地视频、输入视频时刻与屏幕采集时间进行单点对齐（可选首尾两点校正漂移），并排同步播放视频和带算法波峰的波形。支持慢放、按指定秒数步进、点击波形跳转、前后波峰定位、人工疑似漏计／多计记录及 JSON／CSV 导出恢复；可下载独立 HTML 离线复核。详见 [视频复核操作](docs/INFRA.md#视频复核)。
+“视频复核”页支持选择本地视频、输入视频时刻与屏幕采集时间进行单点对齐（可选首尾两点校正漂移），并排同步播放视频和带计数事件的波形。支持慢放、按指定秒数步进、点击波形跳转、前后事件定位、人工疑似漏计／多计记录及 JSON／CSV 导出恢复；可下载独立 HTML 离线复核。详见 [视频复核操作](docs/INFRA.md#视频复核)。
 
 唯一正式入口 `infra_app.py` 提供七个页面：采集、数据、标注、实验、对比、视频复核、算法实验台：
 
@@ -14,11 +14,11 @@
 
 “数据”页可一键创建明确标记的合成六轴示例、标注和数据集，完成无硬件流程验证。支持标注版本、固定数据集引用、参数实验、事件匹配评估、失败片段定位及 HTML／CSV／JSON 导出。完整演示、CLI 和数据契约见 [Infra 使用说明](docs/INFRA.md)。旧 `app.py` 入口已移除；采集统一使用工作台的“采集”页。
 
-算法实验台预置固定波峰、自适应幅度、自适应间隔、两者组合及迟滞状态机，支持批量运行、一维参数扫描、同数据事件差异与视频同步复核。选择已有标注数据集即可离线实验，无需连接硬件。操作与算法边界见 [计数实验台](docs/COUNTING_LAB.md)。视频复核页也可选择“算法实验对比”；本地视频不上传，切换实验／片段前请导出对齐记录。
+**Loss Longer（`loss_longer`）是当前唯一跳绳计数算法。** 实时采集、停止后分析、视频复核和实验共享设备时间逐包计数核心。算法实验台用于比较 Loss Longer 参数，支持一维扫描、事件配对与视频同步复核。详见 [算法说明](docs/LOSS_LONGER.md) 与 [计数实验台](docs/COUNTING_LAB.md)。保存的历史实验仍可浏览和对比。
 
 采集与后续离线复核均在同一工作台完成。
 
-软件接收 ESP32 的六轴 IMU UDP v1 JSON，**先保存 CSV，再从 CSV 读取并显示**。采集页显示实时六轴曲线；停止后可在数据页浏览历史记录、在视频复核页分析波峰，并在算法实验台进行离线对比。
+软件接收 ESP32 的六轴 IMU UDP v1 JSON，先保存 CSV，再逐包更新 Loss Longer 计数。采集页显示实时六轴曲线及累计计数；停止后可在数据页浏览历史记录、在视频复核页复核计数事件，并在算法实验台进行离线对比。
 
 ## 快速启动
 
@@ -41,16 +41,15 @@ python -m venv .venv
 | 位置 | 内容 |
 | --- | --- |
 | `infra_app.py`、`infra/` | 唯一正式入口：采集、历史数据、标注、实验与视频复核 |
-| `beatdance/counting.py` | 五种离线计数预置及统一检测接口 |
+| `beatdance/counting.py` | Loss Longer 计数工厂和回放接口 |
 | `beatdance/` | UDP 接收、CSV 处理、信号分析和统一路径 |
-| `scripts/` | 模拟信号与噪声基准脚本 |
+| `scripts/` | UDP 回放、质量检查及真值工具 |
 | `tests/` | UDP、CSV、算法和界面回归 |
 | `data/examples/` | 版本管理的模拟 CSV 示例 |
 | `data/recordings/` | 按 UTC 日期和唯一批次保存采集数据 |
 | `results/experiments/` | 每配置的独立实验、事件、评分与来源 |
 | `results/counting_batches/`、`results/counting_reviews/` | 批次问题与配置、复盘结论及报告；本地备份并检查 Git 状态 |
 | `results/algorithm_baseline/` | 原项目的算法结果与结果图 |
-| `results/simulations/`、`results/algorithm_runs/` | 新运行生成的独立结果批次 |
 | `docs/` | 运行说明、数据格式和文件导航 |
 | `docs/reports/phase_1/`、`phase_2/` | 原有中英文阶段报告和截图 |
 
@@ -75,15 +74,10 @@ data/recordings/YYYY-MM-DD/HHMMSS_微秒_随机编号/
 # 自动回归
 .\.venv\Scripts\python -m unittest discover -s tests -v
 
-# 模拟信号，结果写入 results/simulations/ 下的新批次
-.\.venv\Scripts\python -m scripts.simulate_imu
-
-# 噪声基准，结果写入 results/algorithm_runs/ 下的新批次
-.\.venv\Scripts\python -m scripts.benchmark_algorithm
+# 本机 UDP 回放
+.\.venv\Scripts\python -m scripts.replay_capture --speed 10
 ```
 
-脚本支持 `--no-show` 和 `--output-dir`，详见 [运行说明](docs/RUNNING.md)。
+## 验证范围
 
-## 当前验证范围
-
-已实现模拟信号分析、UDP v1 协议接入、CSV 持久化、实时显示和历史归档，并有本机 UDP 与界面回归测试。离线计数实验台及视频多算法复核已接入；2026-11-05 本次代码检查通过 49 项 Python 回归和 7 项浏览器逻辑测试，后续数量以实际运行输出为准。ESP32 实物网络联调和真实跳绳识别精度仍待验证；检测波峰不能直接当作真实跳绳次数或动作标注。
+当前已有三段开发录像逐包回放、本机 UDP 和界面流程验证。实物端到端延迟与独立留出录像准确率待验证。

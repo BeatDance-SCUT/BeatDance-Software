@@ -1,39 +1,9 @@
-"""Shared acceleration analysis for simulated and received IMU data."""
-
-from dataclasses import asdict, dataclass
-import math
+"""Single-axis display traces and interval calculation for saved counts."""
 
 import numpy as np
 import pandas as pd
-from scipy.signal import butter, find_peaks, sosfiltfilt
 
-
-STANDARD_GRAVITY = 9.80665
-
-
-@dataclass(frozen=True)
-class AlgorithmConfig:
-    """Offline baseline parameters; acceleration in m/s² and time in seconds."""
-
-    signal: str = "Magnitude"
-    cutoff_hz: float = 5.0
-    prominence: float = 0.7
-    # 实测标定（三组手腕单摇，`scripts.truth_tools calibrate`）：
-    # 0.40 s 时误差 +6.5%/-4.3%/+5.7%（MAE 5.5%，无系统偏差）；
-    # 放宽到 0.36 会把半周期假峰算进来（MAE 11%），到 0.42 又会吞掉真实峰。
-    min_peak_interval: float = 0.4
-    max_gap: float = 0.2
-
-    def __post_init__(self):
-        if self.signal not in ("Magnitude", "X", "Y", "Z"):
-            raise ValueError("unknown signal")
-        for name in ("cutoff_hz", "prominence", "min_peak_interval", "max_gap"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be a finite positive number")
-
-    def to_dict(self):
-        return asdict(self)
+from .landing import GRAVITY
 
 
 def peak_intervals(analysis):
@@ -55,65 +25,16 @@ def peak_intervals(analysis):
     return peaks.loc[peaks["delta_t"] > 0].reset_index(drop=True)
 
 
-def analyze_acceleration(times, acceleration, *, max_gap=None, config=None):
-    """Resample each continuous span on device time, then filter and find peaks.
-
-    UDP gaps longer than max_gap seconds are not interpolated or filtered across.
-    Short spans (<1 second) are shown raw and are not counted as peaks. Results
-    are a retrospective window estimate; edge peaks can change as data arrives.
-    """
-    config = config or AlgorithmConfig()
-    max_gap = config.max_gap if max_gap is None else max_gap
-    times = np.asarray(times, dtype=float)
-    acceleration = np.asarray(acceleration, dtype=float)
-    if (times.ndim != 1 or acceleration.ndim != 1 or times.size != acceleration.size
-            or not np.isfinite(times).all() or not np.isfinite(acceleration).all()
-            or np.any(np.diff(times) <= 0)):
-        raise ValueError("expected finite, equally sized samples with increasing times")
-    if isinstance(max_gap, bool) or not math.isfinite(max_gap) or max_gap <= 0:
-        raise ValueError("max_gap must be positive")
-    columns = ["time", "raw_acceleration", "filtered_acceleration", "is_peak", "span"]
-    if not times.size:
-        return pd.DataFrame(columns=columns)
-    spans = np.split(np.arange(times.size), np.flatnonzero(np.diff(times) > max_gap + 1e-9) + 1)
-    frames = []
-    for span, indices in enumerate(spans):
-        ts, raw = times[indices], acceleration[indices]
-        filtered = raw.copy()
-        peaks = np.array([], dtype=int)
-        if len(ts) >= 4 and ts[-1] - ts[0] >= 1:
-            step = float(np.median(np.diff(ts)))
-            fs = round(1 / step, 8)
-            grid = ts[0] + np.arange(int(round((ts[-1] - ts[0]) / step)) + 1) * step
-            grid = grid[grid <= ts[-1] + 1e-9]
-            raw = np.interp(grid, ts, raw)
-            ts = grid
-            sos = butter(4, min(config.cutoff_hz, fs * 0.4), btype="lowpass", fs=fs, output="sos")
-            # scipy's default padding for this 4th order low-pass is 15 samples.
-            if len(raw) > 15:
-                filtered = sosfiltfilt(sos, raw)
-                peaks, _ = find_peaks(filtered, distance=max(1, int(fs / (1 / config.min_peak_interval))),
-                                      prominence=config.prominence)
-            else:
-                filtered = raw.copy()
-        flags = np.zeros(len(ts), dtype=int)
-        flags[peaks] = 1
-        frames.append(pd.DataFrame(dict(time=ts, raw_acceleration=raw,
-                                       filtered_acceleration=filtered, is_peak=flags, span=span)))
-    return pd.concat(frames, ignore_index=True)[columns]
-
-
-def analyze_imu(records, signal=None, *, config=None):
-    """Analyze the latest boot only, converting firmware g to m/s²."""
-    config = config or AlgorithmConfig()
-    signal = config.signal if signal is None else signal
-    if signal not in ("Magnitude", "X", "Y", "Z"):
-        raise ValueError("unknown signal")
-    if records.empty:
-        return analyze_acceleration([], [], config=config)
-    records = records[records["segment"] == records["segment"].iloc[-1]]
-    if signal == "Magnitude":
-        acceleration = np.linalg.norm(records[["ax_g", "ay_g", "az_g"]].to_numpy(), axis=1)
-    else:
-        acceleration = records[{"X": "ax_g", "Y": "ay_g", "Z": "az_g"}[signal]].to_numpy()
-    return analyze_acceleration(records["time"], acceleration * STANDARD_GRAVITY, config=config)
+def axis_trace(frame, signal, *, max_gap=0.20, cutoff_hz=5.0):
+    raw = frame[f"a{signal.lower()}_g"].to_numpy(dtype=float) * GRAVITY
+    time = frame.time.to_numpy(dtype=float)
+    steps = np.diff(time, prepend=time[0] if len(time) else 0)
+    breaks = (steps > max_gap + 1e-9) | (steps < 0)
+    filtered = raw.copy()
+    for i in range(1, len(raw)):
+        if not breaks[i]:
+            alpha = -np.expm1(-2 * np.pi * cutoff_hz * steps[i])
+            filtered[i] = filtered[i-1] + alpha * (raw[i] - filtered[i-1])
+    return pd.DataFrame(dict(segment=frame.segment.to_numpy(), time=time, raw_acceleration=raw,
+                             filtered_acceleration=filtered, is_peak=np.zeros(len(time), dtype=int),
+                             span=np.cumsum(breaks)))

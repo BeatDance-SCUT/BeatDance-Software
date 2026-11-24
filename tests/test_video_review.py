@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from beatdance.paths import PROJECT_ROOT
-from beatdance.signal_processing import AlgorithmConfig, analyze_imu
+from beatdance.counting import detect
 from infra.demo import install_demo
 from infra.store import Store
 from infra.video_review import build_review_html, build_comparison_review_html
@@ -26,17 +26,16 @@ class VideoReviewTests(unittest.TestCase):
 
     def test_payload_preserves_spans_peaks_and_segment(self):
         frame, _, hashes = self.store.capture(self.key)
-        config = AlgorithmConfig()
-        html = build_review_html(frame, "</script><script>alert(1)</script>", hashes["raw_sha256"], 0, config)
+        html = build_review_html(frame, "</script><script>alert(1)</script>", hashes["raw_sha256"], 0)
         data = json.loads(re.search(r'<script id="review-data" type="application/json">(.*?)</script>', html, re.S)[1])
-        expected = analyze_imu(frame[frame.segment == 0], config=config)
+        expected = detect(frame[frame.segment == 0]).analysis
         actual = pd.DataFrame([p for s in data["spans"] for p in s], columns=["time", "raw_acceleration", "filtered_acceleration", "is_peak"])
-        pd.testing.assert_frame_equal(actual, expected.drop(columns="span"), check_dtype=False)
+        pd.testing.assert_frame_equal(actual, expected[actual.columns], check_dtype=False)
         self.assertEqual(len(data["spans"]), expected.span.nunique())
         self.assertNotIn('</script><script>alert(1)', html)
         self.assertEqual(data["raw_sha256"], hashes["raw_sha256"])
         with self.assertRaisesRegex(ValueError, "没有样本"):
-            build_review_html(frame, self.key, hashes["raw_sha256"], 99, config)
+            build_review_html(frame, self.key, hashes["raw_sha256"], 99)
 
     def test_saved_comparison_payload_and_video_entry(self):
         from infra.experiments import ExperimentConfig, ExperimentJob
@@ -44,8 +43,8 @@ class VideoReviewTests(unittest.TestCase):
         from streamlit.testing.v1 import AppTest
         dataset = self.store.list_objects("dataset")[0]
         ids = []
-        for algorithm in ("offline-butterworth-peaks-v1", "hysteresis-v1"):
-            job = ExperimentJob(self.store, dataset["id"], ExperimentConfig(algorithm_id=algorithm))
+        for params in ({}, {"weak_score": .42}):
+            job = ExperimentJob(self.store, dataset["id"], ExperimentConfig(detector_params=params))
             self.assertEqual(job.run()["status"], "completed")
             ids.append(job.snapshot()["id"])
         runs = load_comparison(self.store, ids)

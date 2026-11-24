@@ -79,51 +79,11 @@ netstat -ano | findstr :5005
 
 切换工作台页面会停止采集并生成分析。关闭/刷新浏览器造成会话失联后，接收器约 60 秒释放端口；之前写入的 CSV 保留。失联停止或进程异常退出后，可在视频复核页读取原始记录进行分析。机器休眠、进程退出或浏览器长期暂停后台刷新都会影响持续采集。
 
-## 模拟和噪声基准
+## 计数与调参
 
-```powershell
-.\.venv\Scripts\python -m scripts.simulate_imu
-.\.venv\Scripts\python -m scripts.benchmark_algorithm
-```
+采集页逐包累计 Loss Longer 计数，页面约每 0.5 秒刷新。停止后的 `analysis_magnitude.csv` 保留事件估计时间和发布时刻。可在 [算法实验台](COUNTING_LAB.md) 用已标注数据快照比较参数。
 
-模拟结果自动写入 `results/simulations/唯一批次/`，噪声基准结果写入 `results/algorithm_runs/唯一批次/`。每次默认使用新目录，保留 `data/examples/` 的示例与 `results/algorithm_baseline/` 的原始结果。两条命令均支持：
-
-```powershell
-.\.venv\Scripts\python -m scripts.simulate_imu --no-show --output-dir .tmp/simulation
-.\.venv\Scripts\python -m scripts.benchmark_algorithm --no-show --output-dir .tmp/benchmark
-```
-
-`--no-show` 仅保存 CSV 和图片，适合自动验证。`--output-dir` 显式指定输出目录；重复使用同一指定目录会更新其中的同名结果。
-
-## 核对检出次数与人工计数
-
-单组即时核对，不给人工计数也能看结构：
-
-```powershell
-.\.venv\Scripts\python -m scripts.truth_tools quick --capture 2026-11-04/125933_337845_8e4eafd3 --blocks 10 --plot data/results/count_check/a.png
-```
-
-输出里三个数要分开看：**全段峰**含起止静置的假峰，**检出**已剔除静置（人的计数只数跳的），**相位法**是对带通信号积 Hilbert 相位的独立估计。`--blocks` 每段计数可与视频分段对齐；`--sweep` 扫阈值与最小间隔看灵敏度。
-
-注意相位法的定位：实测它相对人工计数系统性高估约 12%（手腕处一次跳跃会产生不止一个振荡周期），所以它只能用于发现「整段漏检」，不能当准确率基准，也不能拿两法接近就宣布算法准。
-
-多组批量比对，把人工计数填进 `data/count_truth.csv` 的 `actual` 列：
-
-```powershell
-.\.venv\Scripts\python -m scripts.truth_tools score --truth-file data/count_truth.csv
-```
-
-会给出每组「实际 / 检出 / 相位法 / 差 / 误差」、平均绝对误差与偏差方向。
-
-参数标定（有真值后再做，避免凭手感调参）：
-
-```powershell
-.\.venv\Scripts\python -m scripts.truth_tools calibrate --truth-file data/count_truth.csv
-```
-
-它会在突出度 × 最小峰间隔的网格上排名，同时打印当前默认参数的 MAE，差距小于 2 个百分点时建议不动默认值。2026-11-04 三组手腕单摇的结论：默认（0.7 m/s² / 0.40 s）MAE 5.5%、偏差 +1.7 次；改为 10.0 / 0.40 可到 3.9%，但那是三组拟合出来的，换人前不要当通用值。
-
-注意采样率：`quick` 直接读 `imu_raw.csv`，当前读取器并未将采样率限制为 50 Hz；算法按设备时间估算间距，50／100 Hz 数据仍需分别核对来源和时间质量。软件元信息的目标频率不能替代实际采样率。
+质量检查、真值导入和双人复核见 `python -m scripts.truth_tools --help`。
 
 ## 回归验证
 

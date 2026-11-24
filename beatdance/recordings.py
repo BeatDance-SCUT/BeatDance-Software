@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 
 from .imu_udp import utc_now
-from .signal_processing import AlgorithmConfig, analyze_imu
+from .counting import ALGORITHM_ID, ANALYSIS_COLUMNS, algorithm_metadata, detect
+from .signal_processing import axis_trace
 
 
 SIGNALS = ("Magnitude", "X", "Y", "Z")
@@ -78,31 +79,24 @@ def save_analysis(directory, signal="Magnitude"):
         raise ValueError("unknown acceleration signal")
     directory = Path(directory)
     raw = load_raw_csv(directory / "imu_raw.csv")
-    results = []
-    for segment, frame in raw.groupby("segment", sort=False):
-        result = analyze_imu(frame, signal)
-        result.insert(0, "segment", segment)
-        result.insert(0, "signal", signal)
-        results.append(result)
-    columns = ["signal", "segment", "time", "raw_acceleration", "filtered_acceleration", "is_peak", "span"]
-    analysis = pd.concat(results, ignore_index=True) if results else pd.DataFrame(columns=columns)
+    if signal == "Magnitude":
+        analysis = detect(raw).analysis
+    else:
+        traces = [axis_trace(frame, signal) for _, frame in raw.groupby("segment", sort=False)]
+        analysis = (pd.concat(traces, ignore_index=True) if traces else
+                    pd.DataFrame(columns=ANALYSIS_COLUMNS[:6]))
+    analysis.insert(0, "signal", signal)
     path = directory / f"analysis_{signal.lower()}.csv"
     temp = path.with_suffix(".csv.tmp")
     analysis.to_csv(temp, index=False)
     temp.replace(path)
     metadata_path = directory / "session.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    config = AlgorithmConfig(signal=signal)
     metadata.setdefault("derived_files", {})[path.name] = {
         "created_at_utc": utc_now(), "signal": signal, "acceleration_unit": "m/s^2",
         "input": "imu_raw.csv (all accepted samples)", "rows": len(analysis),
-        "filter": f"4th order Butterworth, cutoff=min({config.cutoff_hz:g} Hz, 0.4*fs), zero-phase sosfiltfilt",
-        "resampling": "median device-time spacing per continuous span; linear interpolation",
-        "max_gap_seconds": config.max_gap, "minimum_span_seconds": 1,
-        "peak_prominence_m_s2": config.prominence,
-        "peak_min_distance_seconds": config.min_peak_interval,
-        "peak_min_distance_samples": f"max(1, int(fs * {config.min_peak_interval:g}))",
-        "note": "Short spans also need >15 samples for filtering. Peaks are algorithm outputs, not labels.",
+        "algorithm_id": ALGORITHM_ID if signal == "Magnitude" else None,
+        "filter": "5 Hz causal low-pass", "max_gap_seconds": algorithm_metadata()["max_gap"],
     }
     temp_metadata = metadata_path.with_suffix(".json.tmp")
     temp_metadata.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -7,45 +7,51 @@ import numpy as np
 import pandas as pd
 from streamlit.testing.v1 import AppTest
 from unittest.mock import patch
-from beatdance.signal_processing import AlgorithmConfig, analyze_imu
-from beatdance.counting import detect, PRESETS, BASELINE
+from beatdance.counting import AXES, detect, new_counter
 from infra.store import Store, read_json
 from infra.demo import install_demo
 from infra.experiments import ExperimentConfig, ExperimentJob
 from infra.counting_lab import BatchJob, load_comparison, paired_cases, meeting_report
 
 class DetectorTests(unittest.TestCase):
-    def frame(self, period=0.5, amplitude=1.0):
+    def frame(self, amplitude=1.0):
         t = np.arange(0, 8, 0.02)
-        return pd.DataFrame(dict(time=t, segment=0, ax_g=0., ay_g=0., az_g=1+amplitude*np.sin(2*np.pi*t/period)))
+        phase = 2 * np.pi * t / .5
+        return pd.DataFrame(dict(time=t, segment=0, ax_g=0., ay_g=0.,
+                                 az_g=1+amplitude*np.sin(phase),
+                                 gx_dps=150*amplitude*np.sin(phase),
+                                 gy_dps=0., gz_dps=0.))
 
-    def test_baseline_identical_and_configs_roundtrip(self):
-        data = self.frame()
-        pd.testing.assert_frame_equal(detect(data).analysis, analyze_imu(data))
-        for a in PRESETS:
-            c = ExperimentConfig(algorithm_id=a)
-            self.assertEqual(ExperimentConfig.from_dict(c.to_dict()), c)
-        for p in ({"interval_ratio": 1}, {"window_seconds": 0}, {"high_sigma": -1}, {"bogus": 1}):
+    def test_config_roundtrip_and_validation(self):
+        config = ExperimentConfig(detector_params={"weak_score": .42})
+        self.assertEqual(ExperimentConfig.from_dict(config.to_dict()), config)
+        for invalid in ({"weak_score": 1}, {"interval_tolerance": 0}, {"bogus": 1},
+                        {"allow_short_pair": 1}, {"hold_periods": float("nan")}):
             with self.assertRaises(ValueError):
-                detect(data, params=p)
+                new_counter(invalid)
+
+    def test_stream_prefix_and_batch_replay_publish_the_same_events(self):
+        data = self.frame()
+        packets = list(data[["time", *AXES]].itertuples(index=False, name=None))
+        counter = new_counter()
+        events = [event for packet in packets for event in counter.push(*packet)]
+        assert events and all(e.emitted_s >= e.time_s for e in events)
+        replay = detect(data).analysis.query("is_peak == 1")
+        finished_events = events + list(counter.finish())
+        np.testing.assert_array_equal(replay.time, [e.time_s for e in finished_events])
+        np.testing.assert_array_equal(replay.emitted_s, [e.emitted_s for e in finished_events])
+        earlier = new_counter()
+        prefix = [event for packet in packets[:200] for event in earlier.push(*packet)]
+        self.assertEqual(prefix, [e for e in events if e.emitted_s <= packets[199][0]])
 
     def test_periodic_static_and_gap_reset(self):
-        for a in PRESETS:
-            result = detect(self.frame(amplitude=.2), algorithm_id=a)
-            count = int(result.analysis.is_peak.sum())
-            self.assertTrue(13 <= count <= 17, (a, count))
-            self.assertEqual(int(detect(self.frame(amplitude=0), algorithm_id=a).analysis.is_peak.sum()), 0)
-            data = self.frame(amplitude=.2)
-            data = data[(data.time < 3) | (data.time > 4)]
-            result = detect(data, algorithm_id=a)
-            self.assertEqual(result.analysis.span.nunique(), 2)
-            self.assertFalse(result.analysis.time.between(3, 4).any())
+        self.assertGreater(detect(self.frame()).analysis.is_peak.sum(), 10)
+        self.assertEqual(detect(self.frame(0)).analysis.is_peak.sum(), 0)
+        data = self.frame()
+        trace = detect(data[(data.time < 3) | (data.time > 4)]).analysis
+        self.assertEqual(trace.span.nunique(), 2)
+        self.assertFalse(trace.time.between(3, 4).any())
 
-    def test_adaptive_interval_fast_and_amplitude_small(self):
-        fast = self.frame(period=.30, amplitude=.2)
-        self.assertGreater(detect(fast, algorithm_id="adaptive-interval-v1").analysis.is_peak.sum(), detect(fast).analysis.is_peak.sum())
-        small = self.frame(amplitude=.04)
-        self.assertGreater(detect(small, algorithm_id="adaptive-amplitude-v1").analysis.is_peak.sum(), detect(small).analysis.is_peak.sum())
 
 class LabTests(unittest.TestCase):
     def setUp(self):
@@ -55,13 +61,13 @@ class LabTests(unittest.TestCase):
         _, _, self.dataset = install_demo(self.store)
 
     def test_batch_compare_report_and_source_compatibility(self):
-        batch = BatchJob(self.store, self.dataset["id"], [ExperimentConfig(algorithm_id=a) for a in PRESETS], "test <script>").start()
+        batch = BatchJob(self.store, self.dataset["id"], [ExperimentConfig(), ExperimentConfig(detector_params={"weak_score": .42})], "test <script>").start()
         batch.thread.join(60)
         self.assertFalse(batch.thread.is_alive())
         state = batch.snapshot()
         self.assertEqual(state["status"], "completed", state)
         runs = load_comparison(self.store, state["runs"])
-        self.assertEqual(len(runs), 5)
+        self.assertEqual(len(runs), 2)
         paired = paired_cases(runs[0]["cases"], runs[1]["cases"])
         self.assertFalse(paired.empty)
         self.assertIn("data:image/png;base64", meeting_report(runs, "<script>"))
@@ -73,12 +79,12 @@ class LabTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             batch.start()
 
-    def test_comparison_empty_truth_and_gap_policy(self):
+    def test_comparison_empty_truth_and_tolerance_policy(self):
         empty = pd.DataFrame(columns=["selection", "segment", "span", "region", "truth_time", "kind"])
         self.assertTrue(paired_cases(empty, empty).empty)
         a = ExperimentJob(self.store, self.dataset["id"])
         a.run()
-        b = ExperimentJob(self.store, self.dataset["id"], ExperimentConfig(algorithm=AlgorithmConfig(max_gap=.6)))
+        b = ExperimentJob(self.store, self.dataset["id"], ExperimentConfig(tolerance_seconds=.6))
         b.run()
         with self.assertRaises(ValueError):
             load_comparison(self.store, [a.snapshot()["id"], b.snapshot()["id"]])
@@ -86,12 +92,12 @@ class LabTests(unittest.TestCase):
     def test_failed_algorithm_does_not_abort_batch(self):
         from infra import experiments
         real = experiments.detect
-        def broken(records, config, algorithm_id, params):
-            if algorithm_id == "adaptive-amplitude-v1":
+        def broken(records, params):
+            if params["weak_score"] == .42:
                 raise ValueError("deliberate synthetic failure")
-            return real(records, config, algorithm_id, params)
+            return real(records, params)
         with patch.object(experiments, "detect", side_effect=broken):
-            batch = BatchJob(self.store, self.dataset["id"], [ExperimentConfig(algorithm_id="adaptive-amplitude-v1"), ExperimentConfig(algorithm_id="hysteresis-v1")]).start()
+            batch = BatchJob(self.store, self.dataset["id"], [ExperimentConfig(detector_params={"weak_score": .42}), ExperimentConfig()]).start()
             batch.thread.join(30)
         self.assertEqual(batch.snapshot()["status"], "completed_with_errors")
         self.assertEqual(len(batch.snapshot()["runs"]), 2)

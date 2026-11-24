@@ -18,6 +18,7 @@ import time
 from uuid import uuid4
 
 from .paths import DEFAULT_RECORDINGS
+from .counting import new_counter
 
 UINT32 = 2**32
 REBOOT_THRESHOLD = 2**31
@@ -139,6 +140,8 @@ class UDPReceiver:
         self._counts = dict(packets=0, invalid=0, ignored_device=0,
                             out_of_order=0, gaps=0, restarts=0)
         self._error = None
+        self._counter = new_counter()
+        self._counting_error = None
         self._finished = False
         self._csv_file = None
         self._thread = None
@@ -222,6 +225,11 @@ class UDPReceiver:
             if self._finished:
                 return
             self._finished = True
+            if self._counting_error is None:
+                try:
+                    self._counter.finish()
+                except (ValueError, ArithmeticError) as exc:
+                    self._counting_error = f"Loss Longer: {exc}"
             if self._csv_file is not None and not self._csv_file.closed:
                 self._csv_file.close()
             self._metadata.update(status="error" if self._error else "stopped", ended_at_utc=utc_now())
@@ -324,6 +332,12 @@ class UDPReceiver:
             self._counts["packets"] += 1
             self._counts["gaps"] += gap
             self._arrivals.append(now)
+            if self._counting_error is None:
+                try:
+                    self._counter.push(record["time"], sample.ax, sample.ay, sample.az,
+                                       sample.gx, sample.gy, sample.gz, segment=self._segment)
+                except (ValueError, ArithmeticError) as exc:
+                    self._counting_error = f"Loss Longer: {exc}"
 
     def snapshot(self, read_rows=True):
         """Read persisted rows and counters; renew the browser's lease."""
@@ -338,5 +352,6 @@ class UDPReceiver:
                 **self._counts, "running": not self._stop.is_set(),
                 "age": None if self._last_receive is None else now - self._last_receive,
                 "packet_rate": len(self._arrivals), "owner": self._owner,
-                "error": self._error,
+                "error": self._error, "jump_count": self._counter.count,
+                "counting_error": self._counting_error,
             }

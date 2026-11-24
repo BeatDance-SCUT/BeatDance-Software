@@ -13,7 +13,7 @@ from beatdance.imu_udp import UDPReceiver
 from beatdance.capture_clock import render_capture_clock
 from beatdance.paths import PROJECT_ROOT
 from beatdance.recordings import CANONICAL_ACCELERATION, CANONICAL_GYRO, rows_to_frame, save_analysis
-from beatdance.signal_processing import AlgorithmConfig
+from beatdance.counting import ALGORITHM_ID
 from .demo import install_demo
 from .experiments import BusyError, ExperimentConfig, ExperimentJob, export_run
 from .store import Store, read_json
@@ -158,12 +158,15 @@ def capture_page(store):
         if st.button("停止并保存", disabled=not running):
             stop_capture(receiver)
             st.rerun()
-        st.caption("切换页面会结束采集；页面失联约 60 秒后释放端口。实时图为离线窗口分析的开发视图。")
+        st.caption("切换页面会结束采集；页面失联约 60 秒后释放端口。计数在样本保存后逐包更新，页面约每 0.5 秒刷新。")
 
         @st.fragment(run_every=0.5 if running else None)
         def live():
             rows, state = receiver.snapshot()
             render_capture_clock(rows, state, receiver.capture_id)
+            st.metric("Loss Longer 累计计数", state["jump_count"])
+            if state["counting_error"]:
+                st.error(state["counting_error"])
             st.json(state)
             if rows:
                 frame = rows_to_frame(rows)
@@ -318,29 +321,30 @@ def experiment_page(store):
     job = st.session_state.get("infra_job")
     active = job is not None and job.thread is not None and job.thread.is_alive()
     runs = store.list_objects("run")
-    template = st.selectbox("从旧实验加载配置", [None] + [r["id"] for r in runs], format_func=lambda v: v or "默认配置")
-    if st.session_state.get("config_template") != template:
-        st.session_state.config_template = template
-        config = read_json(store.object_path("run", template) / "config.json") if template else ExperimentConfig().to_dict()
-        for name, value in config["algorithm"].items():
-            st.session_state[f"cfg_{name}"] = value
-        st.session_state.cfg_tolerance = config["tolerance_seconds"]
+    templates = {}
+    for run in runs:
+        stored = read_json(store.object_path("run", run["id"]) / "config.json")
+        if stored.get("algorithm_id") == ALGORITHM_ID:
+            templates[run["id"]] = stored
+    template = st.selectbox("加载 Loss Longer 配置", [None, *templates],
+                            format_func=lambda v: v or "默认配置")
+    initial = templates[template] if template else ExperimentConfig().to_dict()
     with st.form("experiment_config"):
         dataset_id = st.selectbox("数据集快照", [d["id"] for d in datasets],
                                   format_func=lambda v: next(d["name"] for d in datasets if d["id"] == v) + " · " + v)
-        signal = st.selectbox("分析信号", ["Magnitude", "X", "Y", "Z"], key="cfg_signal")
-        cutoff = st.number_input("截止频率 / Hz", min_value=0.01, value=5.0, key="cfg_cutoff_hz")
-        prominence = st.number_input("峰显著度 / m/s²", min_value=0.001, value=0.7, key="cfg_prominence")
-        distance = st.number_input("最小峰间距 / s", min_value=0.001, value=0.4, key="cfg_min_peak_interval")
-        gap = st.number_input("连续段缺口阈值 / s", min_value=0.001, value=0.2, key="cfg_max_gap")
-        tolerance = st.number_input("事件匹配容差 / s", min_value=0.001, value=0.1, key="cfg_tolerance")
+        params = st.text_area("Loss Longer 参数 JSON", json.dumps(initial["detector_params"], indent=2),
+                              key=f"cfg_params_{template}")
+        tolerance = st.number_input("事件匹配容差 / s", min_value=0.001,
+                                    value=initial["tolerance_seconds"], key=f"cfg_tolerance_{template}")
         submitted = st.form_submit_button("运行实验", disabled=active)
     if submitted:
-        original = read_json(store.object_path("run", template) / "config.json") if template else {}
-        config = ExperimentConfig(AlgorithmConfig(signal, cutoff, prominence, distance, gap), tolerance,
-                                  original.get("algorithm_id", "offline-butterworth-peaks-v1"), original.get("detector_params", {}))
-        st.session_state.infra_job = ExperimentJob(store, dataset_id, config).start()
-        st.rerun()
+        try:
+            config = ExperimentConfig(tolerance_seconds=tolerance, detector_params=json.loads(params))
+        except (ValueError, TypeError) as exc:
+            st.error(str(exc))
+        else:
+            st.session_state.infra_job = ExperimentJob(store, dataset_id, config).start()
+            st.rerun()
     if job:
         if st.button("取消当前实验", disabled=not active):
             job.cancel()

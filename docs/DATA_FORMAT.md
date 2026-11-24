@@ -4,7 +4,7 @@
 
 原始 UDP v1 和 `imu_raw.csv` 格式保持兼容。新增独立人工标注版本、固定引用的数据集快照与实验结果，字段及评估口径见 [Infra 数据契约](INFRA.md#对象与文件契约)。人工动作按 `capture_key + segment + time` 解释；`valid` 区间显式启用评估，`exclude` 区间优先排除。
 
-公共离线算法支持 `AlgorithmConfig`，默认参数与下文一致；自定义配置由每次实验单独记录。实验结果增加 `selection/capture_key/signal/segment/span` 分组，事件仍标记为候选波峰。时间偏差仅为离线候选与人工标注的比较，不代表声音延迟。原有 `save_analysis` 导出与当前视图间隔下载保持原格式和默认参数。
+实时和回放共用 [Loss Longer](LOSS_LONGER.md)。采集与派生结果通过启动片段和设备时间关联。
 
 ## 数据流和批次
 
@@ -59,13 +59,13 @@ columns 记录实际表头；现有 units/sequence_policy 部分文字仍沿用�
 | `segment` | 对应原始启动片段 |
 | `time` | 该片段内的设备相对秒数 |
 | `raw_acceleration` | 转换为 m/s² 后重采样的输入；合加速度使用三轴模长 |
-| `filtered_acceleration` | 四阶 Butterworth 零相位低通输出，m/s² |
-| `is_peak` | 算法检测波峰，0 / 1，不是真实跳绳标签 |
+| `filtered_acceleration` | 5 Hz 因果低通输出，m/s² |
+| `is_peak` | 已发布计数事件的标志，0 / 1 |
 | `span` | 每个启动片段内的连续信号段；超过 0.2 秒的缺口处分段 |
 
-每个连续段按设备时间间隔中位数建立等间距网格，线性插值后滤波；截止频率 `min(5 Hz, 0.4 × fs)`，波峰 prominence 为 0.7 m/s²，最小间距 `max(1, int(fs/2.5))` 点。不足 1 秒或不超过 15 点的片段仅展示输入，不滤波计峰。零相位滤波使用未来样本，适用于离线分析；实时显示是不断重算的窗口估计，边缘波峰可能变化。
+合模分析保留原始采样位置，并在必要时插入事件的精确估计时刻行。`emitted_s` 记录发布时刻，`source`、`count`、`period_s` 分别记录来源、累计计数与事件周期。X/Y/Z 派生文件用于单轴诊断。
 
-不跨启动片段、也不跨大缺口计算波峰间隔。派生文件可能插入短缺口内的插值点，因此不能与原始 CSV 按行号对齐，需按 `segment + time` 对齐。实时显示只读尾部最多 30,000 行并显示选定时间窗口，停止/历史页生成的派生文件处理整份 CSV。
+不跨启动片段、也不跨大缺口计算波峰间隔。派生文件可能插入事件定位点，因此不能与原始 CSV 按行号对齐，需按 `segment + time` 对齐。实时显示只读尾部最多 30,000 行并显示选定时间窗口，停止/历史页生成的派生文件处理整份 CSV。
 
 ## `peak_intervals.csv`：当前视图的波峰间隔
 
@@ -103,6 +103,6 @@ columns 记录实际表头；现有 units/sequence_policy 部分文字仍沿用�
 | results/counting_reviews/<id>/ | review.json 保存所选实验与结论；report.html 保存组会报告 |
 | 浏览器导出的复核 JSON | 对齐点、视频基本信息及人工复核；多算法模式还用 review_context 绑定实验、配置与选区 |
 
-threshold 是峰显著度门槛，不是绝对波形高度；decision_sample_time 也不证明在线时延。复核标记不自动成为评分 Annotation。独立复核 HTML 内嵌波形和标注、不含视频；恢复 JSON 后仍需重新选择本地视频。当前根 .gitignore 未单独列出 counting_batches/counting_reviews，提交前检查状态并另行备份。
+候选文件的 threshold_m_s2 是局部升幅门槛，decision_sample_time 是候选判定时刻。复核标记不自动成为评分 Annotation。独立复核 HTML 内嵌波形和标注、不含视频；恢复 JSON 后仍需重新选择本地视频。当前根 .gitignore 未单独列出 counting_batches/counting_reviews，提交前检查状态并另行备份。
 
 详细参数与复现范围见 [COUNTING_LAB.md](COUNTING_LAB.md)。
