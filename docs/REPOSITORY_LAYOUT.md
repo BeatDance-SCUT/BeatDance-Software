@@ -8,6 +8,7 @@
 | `beatdance/capture_clock.py` | 采集页的视频对时时间显示 |
 | `infra/store.py` | 原始采集校验、导入、标注版本与数据集快照 |
 | `beatdance/counting.py` | Loss Longer 计数工厂和回放 |
+| `beatdance/running_steps.py`、`beatdance/running_rhythm.py` | 右腕跑步落脚、摆臂换向和滚动频率 |
 | `beatdance/loss_longer.py`、`beatdance/landing.py`、`beatdance/waveform.py` | 计数决策、落地候选及周期跟踪 |
 | `infra/counting_lab.py` | 批量编排、配对差异、同步绘图与组会报告 |
 | `infra/counting_ui.py` | 算法实验台与视频对比入口 |
@@ -22,7 +23,7 @@
 | `results/counting_batches/`、`results/counting_reviews/` | 批次状态／配置与复盘报告；当前根 .gitignore 未单独列出，分享前检查 Git 状态 |
 | `tests/test_counting_lab.py` | 流式计数、批次隔离、对比和界面回归 |
 | `docs/COUNTING_LAB.md` | 算法参数、离线实验和视频同步对比使用说明 |
-| `tests/test_infra.py` | 数据契约、评估、实验、命令行及页面回归 |
+| `tests/test_infra.py` | 数据契约、评估、实验、命令行及页面回归，含跑步 UDP 采集和事件导出 |
 | `docs/INFRA.md` | 工作台操作和文件契约 |
 
 `beatdance/signal_processing.py` 管理单轴显示和已保存事件的间隔计算。以上表为模块导航；以下文件树展示主要基础结构，不是完整清单。

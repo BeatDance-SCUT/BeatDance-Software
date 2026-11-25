@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from .paths import DEFAULT_RECORDINGS
 from .counting import new_counter
+from .running_rhythm import MAX_GAP_SECONDS, RunningRhythmCounter
 
 UINT32 = 2**32
 REBOOT_THRESHOLD = 2**31
@@ -124,9 +125,12 @@ def parse_packet(packet):
 class UDPReceiver:
     """One device per capture; persist every accepted sample before displaying it."""
 
-    def __init__(self, bind="0.0.0.0", port=5005, output_dir=DEFAULT_RECORDINGS, idle_timeout=60):
+    def __init__(self, bind="0.0.0.0", port=5005, output_dir=DEFAULT_RECORDINGS, idle_timeout=60,
+                 *, capture_mode="jump-rope"):
         if not 0 <= port <= 65535 or idle_timeout <= 0:
             raise ValueError("invalid receiver configuration")
+        if capture_mode not in ("jump-rope", "running"):
+            raise ValueError("invalid capture mode")
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._arrivals = deque(maxlen=10000)
@@ -140,7 +144,9 @@ class UDPReceiver:
         self._counts = dict(packets=0, invalid=0, ignored_device=0,
                             out_of_order=0, gaps=0, restarts=0)
         self._error = None
-        self._counter = new_counter()
+        self._capture_mode = capture_mode
+        self._counter = RunningRhythmCounter() if capture_mode == "running" else new_counter()
+        self._rhythm = None
         self._counting_error = None
         self._finished = False
         self._csv_file = None
@@ -164,7 +170,7 @@ class UDPReceiver:
                 "schema_version": 1, "protocol_version": 1, "capture_id": self.capture_id,
                 "started_at_utc": stamp.isoformat(), "ended_at_utc": None,
                 "status": "recording", "bind": bind, "port": self._sock.getsockname()[1],
-                "raw_file": "imu_raw.csv", "columns": RAW_COLUMNS,
+                "raw_file": "imu_raw.csv", "columns": RAW_COLUMNS, "capture_mode": capture_mode,
                 "units": {"pc_time": "Unix seconds (PC wall clock)", "t_ms": "device uint32 milliseconds",
                           "time": "seconds since first accepted sample in each segment",
                           "acceleration": "g (includes gravity)", "angular_velocity": "deg/s", "temp_c": "deg C"},
@@ -225,7 +231,7 @@ class UDPReceiver:
             if self._finished:
                 return
             self._finished = True
-            if self._counting_error is None:
+            if self._counting_error is None and self._capture_mode == "jump-rope":
                 try:
                     self._counter.finish()
                 except (ValueError, ArithmeticError) as exc:
@@ -334,10 +340,13 @@ class UDPReceiver:
             self._arrivals.append(now)
             if self._counting_error is None:
                 try:
-                    self._counter.push(record["time"], sample.ax, sample.ay, sample.az,
-                                       sample.gx, sample.gy, sample.gz, segment=self._segment)
+                    update = self._counter.push(record["time"], sample.ax, sample.ay, sample.az,
+                                                sample.gx, sample.gy, sample.gz, segment=self._segment)
+                    if self._capture_mode == "running":
+                        self._rhythm = update
                 except (ValueError, ArithmeticError) as exc:
-                    self._counting_error = f"Loss Longer: {exc}"
+                    algorithm = "Running Rhythm" if self._capture_mode == "running" else "Loss Longer"
+                    self._counting_error = f"{algorithm}: {exc}"
 
     def snapshot(self, read_rows=True):
         """Read persisted rows and counters; renew the browser's lease."""
@@ -348,10 +357,23 @@ class UDPReceiver:
                 self._arrivals.popleft()
             # Hold the writer lock so rows and counters describe one CSV snapshot.
             rows = read_capture_rows(self.csv_path) if read_rows else []
+            age = None if self._last_receive is None else now - self._last_receive
+            running = not self._stop.is_set()
+            if self._capture_mode == "running":
+                rhythm = self._rhythm if (running and self._counting_error is None and
+                                          age is not None and age <= MAX_GAP_SECONDS) else None
+                metrics = {
+                    "step_count": self._counter.step_count,
+                    "arm_cycle_count": self._counter.arm_cycle_count,
+                    "steps_per_min": rhythm.steps_per_min if rhythm else None,
+                    "swings_per_min": rhythm.swings_per_min if rhythm else None,
+                }
+            else:
+                metrics = {"jump_count": self._counter.count}
             return rows, {
-                **self._counts, "running": not self._stop.is_set(),
-                "age": None if self._last_receive is None else now - self._last_receive,
+                **self._counts, **metrics, "running": running, "age": age,
+                "capture_mode": self._capture_mode,
                 "packet_rate": len(self._arrivals), "owner": self._owner,
-                "error": self._error, "jump_count": self._counter.count,
+                "error": self._error,
                 "counting_error": self._counting_error,
             }

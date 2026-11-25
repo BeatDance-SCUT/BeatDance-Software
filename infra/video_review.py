@@ -101,7 +101,7 @@ def video_review_page(store) -> None:
         comparison_video_page(store)
         return
     st.caption("选择采集与启动片段，再在播放器中选择本地视频。视频仅在浏览器读取，不上传或复制到采集目录。")
-    key = capture_selector(store, "video_review_capture")
+    key = capture_selector(store, "video_review_capture", mode="jump-rope")
     if key is None:
         return
     frame, _, hashes = store.capture(key)

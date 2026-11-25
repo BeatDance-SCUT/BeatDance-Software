@@ -12,7 +12,10 @@ import streamlit as st
 from beatdance.imu_udp import UDPReceiver
 from beatdance.capture_clock import render_capture_clock
 from beatdance.paths import PROJECT_ROOT
-from beatdance.recordings import CANONICAL_ACCELERATION, CANONICAL_GYRO, rows_to_frame, save_analysis
+from beatdance.recordings import (
+    CANONICAL_ACCELERATION, CANONICAL_GYRO, RUNNING_EVENTS_FILE,
+    capture_mode, rows_to_frame, running_events, save_analysis,
+)
 from beatdance.counting import ALGORITHM_ID
 from .demo import install_demo
 from .experiments import BusyError, ExperimentConfig, ExperimentJob, export_run
@@ -39,10 +42,12 @@ def stop_capture(receiver):
         notice(f"采集已结束，原始 CSV 已保留；派生分析未生成：{exc}")
 
 
-def capture_selector(store, key="capture_choice", closed=True):
+def capture_selector(store, key="capture_choice", closed=True, mode=None):
     captures = store.captures()
     if closed:
         captures = [c for c in captures if c["metadata"].get("status") in ("stopped", "error") and not c["error"]]
+    if mode is not None:
+        captures = [c for c in captures if capture_mode(c["metadata"]) == mode]
     if not captures:
         st.info("暂无可用采集。请先采集、导入，或在数据页创建合成示例。")
         return None
@@ -140,14 +145,17 @@ def capture_page(store):
         bind = st.text_input("监听地址", "0.0.0.0", disabled=running)
         port = st.number_input("UDP 端口", min_value=0, max_value=65535, value=5005, disabled=running)
         participant = st.text_input("匿名参与者", disabled=running)
-        activity = st.text_input("动作类型", "jump-rope", disabled=running)
+        mode = st.selectbox("采集模式", ("jump-rope", "running"),
+                            format_func={"jump-rope": "跳绳", "running": "跑步"}.get, disabled=running)
+        activity = st.text_input("动作标签（可选）", placeholder="默认使用采集模式", disabled=running)
         placement = st.text_input("佩戴位置与方向", disabled=running)
         notes = st.text_area("实验条件与备注", disabled=running)
+        st.caption("跑步摆频使用右腕 IMU 的 gy 轴，佩戴方向需与开发录制一致。")
         start = st.form_submit_button("开始采集", disabled=running)
     if start:
-        new_receiver = UDPReceiver(bind, int(port), output_dir=store.recordings)
+        new_receiver = UDPReceiver(bind, int(port), output_dir=store.recordings, capture_mode=mode)
         try:
-            new_receiver.set_labels(participant, activity, f"佩戴：{placement}\n{notes}")
+            new_receiver.set_labels(participant, activity.strip() or mode, f"佩戴：{placement}\n{notes}")
             new_receiver.start()
         except Exception:
             new_receiver.stop()
@@ -164,7 +172,14 @@ def capture_page(store):
         def live():
             rows, state = receiver.snapshot()
             render_capture_clock(rows, state, receiver.capture_id)
-            st.metric("Loss Longer 累计计数", state["jump_count"])
+            if state["capture_mode"] == "running":
+                steps, cadence, swings, swing_rate = st.columns(4)
+                steps.metric("累计步数", state["step_count"])
+                cadence.metric("步频（步/分）", format_rate(state["steps_per_min"]))
+                swings.metric("右臂摆动圈数", state["arm_cycle_count"])
+                swing_rate.metric("右臂摆频（圈/分）", format_rate(state["swings_per_min"]))
+            else:
+                st.metric("Loss Longer 累计计数", state["jump_count"])
             if state["counting_error"]:
                 st.error(state["counting_error"])
             st.json(state)
@@ -176,6 +191,10 @@ def capture_page(store):
             if state["error"]:
                 st.error(state["error"])
         live()
+
+
+def format_rate(rate):
+    return "—" if rate is None else f"{rate:.1f}"
 
 
 def data_page(store):
@@ -206,6 +225,18 @@ def data_page(store):
             st.warning("合成数据，仅用于功能验收。")
         with st.expander("元信息与质量统计"):
             st.json(meta)
+        if capture_mode(meta) == "running":
+            path = store.capture_path(key) / RUNNING_EVENTS_FILE
+            summary = meta.get("derived_files", {}).get(RUNNING_EVENTS_FILE, {})
+            if path.is_file() and {"step_count", "arm_cycle_count"} <= summary.keys():
+                event_csv = path.read_bytes()
+            else:
+                events, summary = running_events(frame)
+                event_csv = events.to_csv(index=False).encode("utf-8")
+            steps, swings = st.columns(2)
+            steps.metric("累计步数", summary["step_count"])
+            swings.metric("右臂摆动圈数", summary["arm_cycle_count"])
+            st.download_button("导出跑步事件 CSV", event_csv, RUNNING_EVENTS_FILE, mime="text/csv")
         window = time_window(frame, f"data_{key}")
         if window:
             raw_plot(frame, *window)

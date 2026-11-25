@@ -3,9 +3,11 @@
 import io
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -298,6 +300,50 @@ class WorkbenchTests(InfraCase):
         self.assertFalse(receiver.snapshot(read_rows=False)[1]["running"])
         self.assertTrue(receiver.csv_path.exists())
         self.assertFalse(app.exception)
+
+    def test_running_mode_through_udp_capture_and_event_export(self):
+        app = self.app()
+        next(s for s in app.selectbox if s.label == "采集模式").set_value("running")
+        next(t for t in app.text_input if t.label == "监听地址").set_value("127.0.0.1")
+        next(n for n in app.number_input if n.label == "UDP 端口").set_value(0)
+        next(b for b in app.button if b.label == "开始采集").click().run()
+        receiver = app.session_state["infra_receiver"]
+        self.addCleanup(receiver.stop)
+
+        source = PROJECT_ROOT / "data/recordings/2026-11-16/100706_068655_e52fae57/imu_raw.csv"
+        columns = ["seq", "t_us", "ax", "ay", "az", "gx", "gy", "gz"]
+        packets = pd.read_csv(source, usecols=columns).to_dict("records")
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+            # Leave room in the receiver buffer on slow test machines.
+            for start in range(0, len(packets), 32):
+                batch = packets[start:start + 32]
+                for packet in batch:
+                    sender.sendto(json.dumps({"v": 1, **packet}).encode("utf-8"), receiver.address)
+                expected = start + len(batch)
+                deadline = time.monotonic() + 3
+                state = receiver.snapshot(read_rows=False)[1]
+                while state["packets"] < expected and time.monotonic() < deadline:
+                    time.sleep(0.005)
+                    state = receiver.snapshot(read_rows=False)[1]
+                self.assertEqual(state["packets"], expected)
+
+        self.assertIsNone(state["counting_error"])
+        self.assertEqual(state["step_count"], 74)
+        self.assertEqual(state["arm_cycle_count"], 34)
+        app.run()
+        self.assertEqual({metric.label: metric.value for metric in app.metric}["累计步数"], "74")
+        next(b for b in app.button if b.label == "停止并保存").click().run()
+        events = pd.read_csv(receiver.directory / "running_events.csv")
+        self.assertEqual(events["type"].value_counts().to_dict(), {"step": 74, "arm_turn": 38})
+        self.assertEqual(events["is_cycle_end"].sum(), 34)
+        self.assertTrue((events["published_s"] >= events["event_s"]).all())
+        metadata = read_json(receiver.directory / "session.json")
+        self.assertEqual(metadata["capture_mode"], "running")
+        self.assertEqual(metadata["labels"]["activity"], "running")
+        app.sidebar.radio[0].set_value("数据").run()
+        self.assertFalse(app.exception)
+        self.assertFalse(app.error)
+        self.assertTrue(any(b.label == "导出跑步事件 CSV" for b in app.get("download_button")))
 
     def test_ui_creates_dataset_runs_two_configs_and_locates_failure(self):
         app = self.app()

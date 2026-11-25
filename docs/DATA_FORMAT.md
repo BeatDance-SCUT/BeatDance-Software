@@ -4,7 +4,7 @@
 
 原始 UDP v1 和 `imu_raw.csv` 格式保持兼容。新增独立人工标注版本、固定引用的数据集快照与实验结果，字段及评估口径见 [Infra 数据契约](INFRA.md#对象与文件契约)。人工动作按 `capture_key + segment + time` 解释；`valid` 区间显式启用评估，`exclude` 区间优先排除。
 
-实时和回放共用 [Loss Longer](LOSS_LONGER.md)。采集与派生结果通过启动片段和设备时间关联。
+各采集模式的实时处理和回放使用同一算法。跳绳使用 [Loss Longer](LOSS_LONGER.md)，跑步使用右腕落脚和摆臂检测。采集与派生结果通过启动片段和设备时间关联。
 
 ## 数据流和批次
 
@@ -41,6 +41,7 @@ UTF-8、逗号分隔、有表头；每行一个已通过校验且被接受的原
 
 - `capture_id`、`started_at_utc`、`ended_at_utc`：批次标识和 UTC 起止时间。
 - `labels.participant`：可选匿名参与者编号；`labels.activity`：整批动作标签；`labels.notes`：佩戴位置、实验条件等备注。
+- `capture_mode`：采集计数模式，取值 `jump-rope` 或 `running`。历史记录缺少此字段时，动作标签 `running` 对应跑步模式。
 - `units`、`protocol_version`、`schema_version`：解释数据的单位和格式。
 - `owner`：当前接收器锁定的来源 IP，历史元信息可能保存设备与 IP 组合；`counts`：已保存样本、无效包、其他设备包、重复/乱序包、序号缺口、推测重启的统计。
 - `status`：`recording` / `stopped` / `error`；`error`：停止错误；`derived_files`：派生文件与处理参数。
@@ -51,7 +52,7 @@ columns 记录实际表头；现有 units/sequence_policy 部分文字仍沿用�
 
 ## `analysis_*.csv`：可重新生成的派生数据
 
-停止时自动生成完整 `analysis_magnitude.csv`，历史页也可生成 `analysis_x.csv`、`analysis_y.csv`、`analysis_z.csv`。自动生成的合加速度与实时界面选择的单轴无关；所选轴的完整文件可在历史页生成。
+跳绳模式停止时自动生成完整 `analysis_magnitude.csv`。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -66,6 +67,18 @@ columns 记录实际表头；现有 units/sequence_policy 部分文字仍沿用�
 合模分析保留原始采样位置，并在必要时插入事件的精确估计时刻行。`emitted_s` 记录发布时刻，`source`、`count`、`period_s` 分别记录来源、累计计数与事件周期。X/Y/Z 派生文件用于单轴诊断。
 
 不跨启动片段、也不跨大缺口计算波峰间隔。派生文件可能插入事件定位点，因此不能与原始 CSV 按行号对齐，需按 `segment + time` 对齐。实时显示只读尾部最多 30,000 行并显示选定时间窗口，停止/历史页生成的派生文件处理整份 CSV。
+
+## `running_events.csv`：跑步事件
+
+跑步模式停止时对原始数据逐包回放并生成此文件。累计步数和完整摆臂圈数写入 `session.json` 的对应派生文件记录。
+
+| 字段 | 含义 |
+| --- | --- |
+| `segment` | 原始启动片段 |
+| `type` | `step` 为落脚，`arm_turn` 为右臂同相位换向 |
+| `event_s`、`published_s` | 事件估计时刻、算法确认并发布的时刻，均为该片段内的设备秒数 |
+| `steps_per_min`、`swings_per_min` | 该包处理完成时的滚动步频、摆频，尚无有效频率时留空 |
+| `is_cycle_end` | 该换向是否完成一个有效摆臂周期，0 / 1 |
 
 ## `peak_intervals.csv`：当前视图的波峰间隔
 

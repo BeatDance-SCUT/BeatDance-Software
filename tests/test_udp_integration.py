@@ -182,7 +182,8 @@ class CaptureTests(unittest.TestCase):
             next(b for b in app.button if b.label == "开始采集").click().run()
             receiver = app.session_state["infra_receiver"]
             self.addCleanup(receiver.stop)
-            sent, _ = replay(source, "127.0.0.1", port, speed=50, verbose=False)
+            # Use the documented replay speed so this tests capture, not UDP saturation.
+            sent, _ = replay(source, "127.0.0.1", port, speed=10, verbose=False)
             wait_for(receiver, "packets", sent)
             app.run()
             self.assertEqual(len(app.exception), 0)
